@@ -12,7 +12,7 @@ import syncRouter from './routes/sync';
 import suppliersRouter from './routes/suppliers';
 import authRouter from './routes/auth';
 import forecastRouter from './routes/forecast';
-import forecastV2Router from './routes/forecast-v2';
+// forecast-v2 は forecast.ts に統合済み（削除）
 import backtestRouter from './routes/backtest';
 import debugRouter from './routes/debug';
 import ordersRouter from './routes/orders';
@@ -69,7 +69,7 @@ app.use('/api/sync', syncRouter);
 app.use('/api/suppliers', suppliersRouter);
 app.use('/api/auth', authRouter);
 app.use('/api/forecast', forecastRouter);
-app.use('/api/v2/forecast', forecastV2Router);
+// app.use('/api/v2/forecast', ...) → forecast.ts に統合済み
 app.use('/api/backtest', backtestRouter);
 app.use('/api/debug', debugRouter);
 app.use('/api/orders', ordersRouter);
@@ -105,14 +105,26 @@ async function runDailySync() {
     // 4. 集計テーブルを更新（昨日分）
     const summaryCount = await updateDailySummaryForDate(dateStr);
     
+    // 5. 需要予測の自動学習（精度評価 + パラメータ最適化）
+    let learningResult = null;
+    try {
+      const { runDailyLearning } = await import('./services/forecast-learner');
+      learningResult = await runDailyLearning();
+    } catch (e: any) {
+      console.log('⚠️ 自動学習スキップ（テーブル未作成の可能性）:', e.message);
+    }
+    
     console.log('✅ 毎日の自動同期完了');
     console.log(`   日付: ${dateStr}`);
     console.log(`   商品: ${productsResult.count}件`);
     console.log(`   在庫: ${stockResult.count}件`);
     console.log(`   売上: ${salesResult.count}件`);
     console.log(`   集計: ${summaryCount}件`);
+    if (learningResult) {
+      console.log(`   🧠 学習: ${learningResult.learning.updated}商品更新`);
+    }
     
-    return { success: true, date: dateStr, productsCount: productsResult.count, stockCount: stockResult.count, salesCount: salesResult.count, summaryCount };
+    return { success: true, date: dateStr, productsCount: productsResult.count, stockCount: stockResult.count, salesCount: salesResult.count, summaryCount, learningResult };
   } catch (error: any) {
     console.error('❌ 自動同期エラー:', error.message);
     return { success: false, error: error.message };

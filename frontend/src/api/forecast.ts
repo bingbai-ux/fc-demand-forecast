@@ -1,10 +1,11 @@
-// 発注予測APIクライアント
+/**
+ * 需要予測APIクライアント（統合版）
+ * V1/V2統合済み — 単一エンドポイントのみ
+ */
 
 const API_BASE = import.meta.env.VITE_API_URL || '';
 
-/**
- * V1発注計算（既存）
- */
+/** 需要予測計算 */
 export async function calculateForecast(params: {
   storeId: string;
   supplierNames: string[];
@@ -15,80 +16,75 @@ export async function calculateForecast(params: {
   const response = await fetch(`${API_BASE}/api/forecast/calculate`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(params)
+    body: JSON.stringify(params),
   });
   return response.json();
 }
 
-/**
- * V2発注計算（ARIMA + ABC最適化）
- */
-export async function calculateForecastV2(params: {
-  storeId: string;
-  supplierId: string;
-  targetDate?: string;
-  forecastDays?: number;
-  referenceDays?: number;
+/** 店舗一覧 */
+export async function getStores() {
+  const response = await fetch(`${API_BASE}/api/forecast/stores`);
+  return response.json();
+}
+
+/** 仕入先一覧 */
+export async function getSuppliers() {
+  const response = await fetch(`${API_BASE}/api/forecast/suppliers`);
+  return response.json();
+}
+
+/** 商品売上履歴 */
+export async function getProductSalesHistory(productId: string, storeId: string, weeks = 8) {
+  const response = await fetch(
+    `${API_BASE}/api/forecast/product-sales-history?productId=${productId}&storeId=${storeId}&weeks=${weeks}`,
+  );
+  return response.json();
+}
+
+/** 商品詳細 */
+export async function getProductDetail(productId: string, storeId: string, days = 30) {
+  const response = await fetch(
+    `${API_BASE}/api/forecast/product-detail/${productId}?storeId=${storeId}&days=${days}`,
+  );
+  return response.json();
+}
+
+/** 在庫シミュレーション */
+export async function simulateStock(params: {
+  currentStock: number;
+  avgDailySales: number;
+  leadTime: number;
+  orderQuantity: number;
+  safetyStock?: number;
+  days?: number;
 }) {
-  const response = await fetch(`${API_BASE}/api/v2/forecast/calculate`, {
+  const response = await fetch(`${API_BASE}/api/forecast/simulate-stock`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      targetDate: new Date().toISOString().split('T')[0],
-      forecastDays: 7,
-      referenceDays: 60,
-      ...params
-    })
-  });
-  
-  if (!response.ok) {
-    throw new Error(`APIエラー: ${response.status}`);
-  }
-  
-  return response.json();
-}
-
-/**
- * ABC設定取得
- */
-export async function getABCConfig() {
-  const response = await fetch(`${API_BASE}/api/v2/forecast/abc-config`);
-  return response.json();
-}
-
-/**
- * 統計情報取得
- */
-export async function getForecastStats() {
-  const response = await fetch(`${API_BASE}/api/v2/forecast/stats`);
-  return response.json();
-}
-
-/**
- * バックテスト実行
- */
-export async function runBacktest(params: {
-  productId: string;
-  startDate: string;
-  endDate: string;
-  algorithm: 'arima' | 'prophet' | 'moving_average' | 'ensemble';
-}) {
-  const response = await fetch(`${API_BASE}/api/backtest/run`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(params)
+    body: JSON.stringify(params),
   });
   return response.json();
 }
 
-/**
- * 自動最適化
- */
-export async function optimizeForecast(productId: string, days?: number) {
-  const response = await fetch(`${API_BASE}/api/backtest/optimize`, {
+/** 欠品コスト分析 */
+export async function getStockoutAnalysis(storeId: string, month?: string) {
+  const query = month ? `?month=${month}` : '';
+  const response = await fetch(`${API_BASE}/api/forecast/stockout-analysis/${storeId}${query}`);
+  return response.json();
+}
+
+/** 調整係数取得 */
+export async function getAdjustments() {
+  const response = await fetch(`${API_BASE}/api/forecast/adjustments`);
+  return response.json();
+}
+
+/** 調整係数保存 */
+export async function saveAdjustments(adjustments: any) {
+  const response = await fetch(`${API_BASE}/api/forecast/adjustments`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ productId, days })
+    body: JSON.stringify({ adjustments }),
   });
   return response.json();
 }
