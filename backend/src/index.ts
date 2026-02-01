@@ -12,6 +12,7 @@ import syncRouter from './routes/sync';
 import suppliersRouter from './routes/suppliers';
 import authRouter from './routes/auth';
 import forecastRouter from './routes/forecast';
+import backtestRouter from './routes/backtest';
 import debugRouter from './routes/debug';
 import ordersRouter from './routes/orders';
 import settingsRouter from './routes/settings';
@@ -67,6 +68,7 @@ app.use('/api/sync', syncRouter);
 app.use('/api/suppliers', suppliersRouter);
 app.use('/api/auth', authRouter);
 app.use('/api/forecast', forecastRouter);
+app.use('/api/backtest', backtestRouter);
 app.use('/api/debug', debugRouter);
 app.use('/api/orders', ordersRouter);
 app.use('/api/settings', settingsRouter);
@@ -157,6 +159,11 @@ const startServer = async () => {
     console.log(`🔐 認証API:`);
     console.log(`   - GET  /api/auth/token-status  ← トークン状態確認`);
     console.log(`   - POST /api/auth/refresh-token  ← トークン手動更新`);
+    console.log(`📊 バックテストAPI:`);
+    console.log(`   - POST /api/backtest/run  ← バックテスト実行`);
+    console.log(`   - POST /api/backtest/optimize  ← 自動最適化`);
+    console.log(`   - GET  /api/backtest/results/:productId  ← 結果取得`);
+    console.log(`   - GET  /api/backtest/health  ← ヘルスチェック`);
   });
 };
 
