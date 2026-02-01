@@ -199,6 +199,7 @@ export const ProductDetailModal: React.FC<ProductDetailModalProps> = ({
             {/* 売上推移グラフ */}
             <div className="bg-gray-50 rounded-lg p-4">
               <h3 className="font-semibold text-gray-700 mb-3">📈 過去30日の売上推移</h3>
+              {detailData.salesHistory && detailData.salesHistory.length > 0 ? (
               <ResponsiveContainer width="100%" height={200}>
                 <ComposedChart data={detailData.salesHistory}>
                   <CartesianGrid strokeDasharray="3 3" />
@@ -243,6 +244,11 @@ export const ProductDetailModal: React.FC<ProductDetailModalProps> = ({
                   />
                 </ComposedChart>
               </ResponsiveContainer>
+              ) : (
+                <div className="h-[200px] flex items-center justify-center text-gray-400">
+                  グラフデータがありません
+                </div>
+              )}
               {detailData.stockoutDays > 0 && (
                 <div className="mt-2 text-sm text-red-600">
                   ⚠️ 過去30日間で{detailData.stockoutDays}日の欠品がありました
@@ -258,6 +264,7 @@ export const ProductDetailModal: React.FC<ProductDetailModalProps> = ({
                   （発注数: {adjustedQuantity}個の場合）
                 </span>
               </h3>
+              {simulation && simulation.length > 0 ? (
               <ResponsiveContainer width="100%" height={200}>
                 <ComposedChart data={simulation}>
                   <CartesianGrid strokeDasharray="3 3" />
@@ -301,6 +308,11 @@ export const ProductDetailModal: React.FC<ProductDetailModalProps> = ({
                   />
                 </ComposedChart>
               </ResponsiveContainer>
+              ) : (
+                <div className="h-[200px] flex items-center justify-center text-gray-400">
+                  シミュレーションデータがありません
+                </div>
+              )}
               <div className="mt-2 flex gap-4 text-sm">
                 <span className="text-gray-600">
                   現在庫: <strong>{detailData.currentStock}個</strong>

@@ -842,10 +842,14 @@ const StepResult: React.FC<StepResultProps> = ({
                               boxShadow: '2px 0 4px rgba(0,0,0,0.05)',
                             }}
                           >
-                            <span className="font-medium truncate max-w-[160px] text-sm inline-flex items-center" title={product.productName}>
-                              {product.productName}
-                              <AlgorithmBadge algorithm={product.algorithm || 'simple'} />
-                            </span>
+                            <div className="font-medium text-sm" title={product.productName}>
+                              <span className="truncate max-w-[140px] inline-block align-middle">
+                                {product.productName}
+                              </span>
+                              <span className="inline-block align-middle ml-1">
+                                <AlgorithmBadge algorithm={product.algorithm || 'simple'} />
+                              </span>
+                            </div>
                           </td>
                           <td className="px-2 py-1.5 text-right text-gray-600 whitespace-nowrap text-xs">¥{product.cost?.toLocaleString() || '-'}</td>
                           <td className="px-2 py-1.5 text-right bg-blue-50 whitespace-nowrap text-xs">{product.currentStock > 0 ? product.currentStock : '-'}</td>

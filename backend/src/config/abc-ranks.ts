@@ -80,9 +80,30 @@ export function calculateABCRanks(
   
   const result = new Map<string, { rank: string; cumulativeRatio: number }>();
   
+  // 売上が全て0の場合は、順位ベースでランクを割り当て
+  if (totalSales === 0) {
+    const totalCount = sorted.length;
+    sorted.forEach((product, index) => {
+      const position = (index + 1) / totalCount;
+      let rank: string;
+      if (position <= 0.10) rank = 'A';      // 上位10%
+      else if (position <= 0.25) rank = 'B'; // 上位25%
+      else if (position <= 0.50) rank = 'C'; // 上位50%
+      else if (position <= 0.75) rank = 'D'; // 上位75%
+      else rank = 'E';                       // 下位25%
+      
+      result.set(product.productId, {
+        rank,
+        cumulativeRatio: Math.round(position * 1000) / 1000
+      });
+    });
+    return result;
+  }
+  
+  // 通常の売上ベースランク計算
   sorted.forEach(product => {
     cumulativeSales += product.totalSales;
-    const cumulativeRatio = totalSales > 0 ? cumulativeSales / totalSales : 0;
+    const cumulativeRatio = cumulativeSales / totalSales;
     const rank = getRankByCumulativeRatio(cumulativeRatio);
     
     result.set(product.productId, {

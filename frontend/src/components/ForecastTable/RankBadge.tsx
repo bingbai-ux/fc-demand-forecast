@@ -6,52 +6,33 @@ interface RankBadgeProps {
 
 /**
  * ABCランクバッジ（色分け強化版）
- * 画像の既存UIに合わせたデザイン
+ * inline styleで確実に色を適用
  */
 export function RankBadge({ rank, className = '', showLabel = false }: RankBadgeProps) {
-  const rankStyles = {
-    A: {
-      bg: 'bg-red-100',
-      text: 'text-red-800',
-      border: 'border-red-200',
-      label: '最重要'
-    },
-    B: {
-      bg: 'bg-orange-100',
-      text: 'text-orange-800',
-      border: 'border-orange-200',
-      label: '重要'
-    },
-    C: {
-      bg: 'bg-yellow-100',
-      text: 'text-yellow-800',
-      border: 'border-yellow-200',
-      label: '標準'
-    },
-    D: {
-      bg: 'bg-green-100',
-      text: 'text-green-800',
-      border: 'border-green-200',
-      label: '低優先'
-    },
-    E: {
-      bg: 'bg-gray-100',
-      text: 'text-gray-600',
-      border: 'border-gray-200',
-      label: '最少'
-    }
+  // inline styleで確実に色を適用（Tailwindクラスが効かない場合のフォールバック）
+  const rankColors: Record<string, { bg: string; text: string; label: string }> = {
+    A: { bg: '#fee2e2', text: '#991b1b', label: '最重要' },     // 赤
+    B: { bg: '#ffedd5', text: '#9a3412', label: '重要' },       // 橙
+    C: { bg: '#fef3c7', text: '#92400e', label: '標準' },       // 黄
+    D: { bg: '#d1fae5', text: '#065f46', label: '低優先' },     // 緑
+    E: { bg: '#f3f4f6', text: '#4b5563', label: '最少' }        // 灰
   };
 
-  const style = rankStyles[rank];
+  const colors = rankColors[rank];
 
   return (
     <span 
-      className={`inline-flex items-center px-2 py-1 text-xs font-bold rounded border ${style.bg} ${style.text} ${style.border} ${className}`}
-      title={`ABCランク: ${style.label}`}
+      className={`inline-flex items-center px-2 py-1 text-xs font-bold rounded border ${className}`}
+      style={{
+        backgroundColor: colors.bg,
+        color: colors.text,
+        borderColor: colors.text + '40'  // 40は透明度
+      }}
+      title={`ABCランク: ${colors.label}`}
     >
       {rank}
       {showLabel && (
-        <span className="ml-1 font-normal text-[10px] opacity-75">{style.label}</span>
+        <span className="ml-1 font-normal text-[10px] opacity-75">{colors.label}</span>
       )}
     </span>
   );

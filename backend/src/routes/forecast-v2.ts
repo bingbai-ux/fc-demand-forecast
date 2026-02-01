@@ -27,11 +27,20 @@ router.post('/calculate', async (req, res) => {
 
     console.log(`[V2] 発注計算開始: store=${storeId}, supplier=${supplierId}`);
 
-    // 1. 仕入先の商品を取得
-    const { data: products, error: prodError } = await prisma
+    // 1. 仕入先の商品を取得（supplier_nameでも検索）
+    let { data: products, error: prodError } = await prisma
       .from('products_cache')
-      .select('product_id, product_name, cost, price, category_name')
+      .select('product_id, product_name, cost, price, category_name, supplier_name')
       .eq('supplier_id', supplierId);
+    
+    // supplier_idで見つからない場合はsupplier_nameで検索
+    if (!products || products.length === 0) {
+      const { data: productsByName } = await prisma
+        .from('products_cache')
+        .select('product_id, product_name, cost, price, category_name, supplier_name')
+        .eq('supplier_name', supplierId);
+      products = productsByName;
+    }
 
     if (prodError || !products || products.length === 0) {
       return res.status(404).json({ error: '商品が見つかりません' });
@@ -75,12 +84,27 @@ router.post('/calculate', async (req, res) => {
       productSales[s.product_id] = (productSales[s.product_id] || 0) + s.total_quantity;
     });
 
-    // 6. ABCランク計算
-    const abcInput = products.map((p: any) => ({
+    // 6. ABCランク計算（売上がある商品のみで計算）
+    const productsWithSales = products.filter((p: any) => (productSales[p.product_id] || 0) > 0);
+    
+    // 売上がある商品が少ない場合（5件未満）は全商品を対象に
+    const abcTargetProducts = productsWithSales.length >= 5 ? productsWithSales : products;
+    
+    const abcInput = abcTargetProducts.map((p: any) => ({
       productId: p.product_id,
       totalSales: productSales[p.product_id] || 0
     }));
+    
+    console.log(`[V2] ABC分析対象: ${abcInput.length}商品, 売上あり: ${productsWithSales.length}商品`);
+    
     const abcRanks = calculateABCRanks(abcInput);
+    
+    // デバッグ: ABCランク分布
+    const rankCounts: Record<string, number> = {};
+    abcRanks.forEach(({ rank }) => {
+      rankCounts[rank] = (rankCounts[rank] || 0) + 1;
+    });
+    console.log('[V2] ABCランク分布:', rankCounts);
 
     // 7. 仕入先情報（リードタイム）
     const { data: supplier } = await prisma
