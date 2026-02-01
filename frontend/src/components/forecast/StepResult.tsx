@@ -1,8 +1,10 @@
 import React, { useState, useMemo } from 'react';
 import OrderSummary from './OrderSummary';
 import ProductDetailModal from './ProductDetailModal';
-// MonthEndAlert removed
 import StockoutCostDashboard from './StockoutCostDashboard';
+import { AlgorithmBadge } from '../ForecastTable/AlgorithmBadge';
+import { RankBadge } from '../ForecastTable/RankBadge';
+import { OrderBreakdownTooltip } from '../ForecastTable/OrderBreakdownTooltip';
 
 interface PastSale {
   date?: string;
@@ -26,6 +28,7 @@ interface Product {
   lotSize?: number;
   orderAmount: number;
   rank: string;
+  algorithm?: 'arima' | 'simple' | 'ensemble';
   abcRank?: string;
   avgDailySales?: number;
   stockDays?: number;
@@ -238,22 +241,6 @@ const getAlertIcon = (alertFlags?: string[]) => {
   }
   // 異常なしの場合は適正（緑）
   return <span title="適正" className="cursor-help">🟢</span>;
-};
-
-const getABCBadge = (rank?: string) => {
-  if (!rank) return null;
-  const colors: Record<string, string> = {
-    A: 'bg-red-500 text-white',
-    B: 'bg-orange-400 text-white',
-    C: 'bg-yellow-400 text-gray-800',
-    D: 'bg-green-400 text-white',
-    E: 'bg-gray-400 text-white',
-  };
-  return (
-    <span className={`px-1.5 py-0.5 rounded text-xs font-bold ${colors[rank] || colors.C}`}>
-      {rank}
-    </span>
-  );
 };
 
 const StepResult: React.FC<StepResultProps> = ({
@@ -836,9 +823,9 @@ const StepResult: React.FC<StepResultProps> = ({
                           key={`${groupIdx}-${idx}`} 
                           className={`border-b border-gray-200 hover:bg-gray-100 ${isDiscontinued ? 'opacity-50' : ''} ${rowBg}`}
                         >
-                          {/* ランク */}
+                          {/* ランク - V2 Badge */}
                           <td className={`px-1 py-1.5 text-center whitespace-nowrap ${rowBg}`}>
-                            {getABCBadge(product.rank)}
+                            <RankBadge rank={product.rank as 'A' | 'B' | 'C' | 'D' | 'E'} />
                           </td>
                           {/* 状態（アラートアイコン） */}
                           <td className={`px-1 py-1.5 text-center whitespace-nowrap ${rowBg}`}>
@@ -855,8 +842,9 @@ const StepResult: React.FC<StepResultProps> = ({
                               boxShadow: '2px 0 4px rgba(0,0,0,0.05)',
                             }}
                           >
-                            <span className="font-medium truncate max-w-[160px] text-sm" title={product.productName}>
+                            <span className="font-medium truncate max-w-[160px] text-sm inline-flex items-center" title={product.productName}>
                               {product.productName}
+                              <AlgorithmBadge algorithm={product.algorithm || 'simple'} />
                             </span>
                           </td>
                           <td className="px-2 py-1.5 text-right text-gray-600 whitespace-nowrap text-xs">¥{product.cost?.toLocaleString() || '-'}</td>
@@ -871,7 +859,15 @@ const StepResult: React.FC<StepResultProps> = ({
                               </td>
                             );
                           })}
-                          <td className="px-2 py-1.5 text-right whitespace-nowrap text-xs">{product.forecastQuantity}</td>
+                          <td className="px-2 py-1.5 text-right whitespace-nowrap text-xs">
+                            <OrderBreakdownTooltip 
+                              breakdown={`予測${product.forecastQuantity} + 安全${product.safetyStock} - 在庫${product.currentStock} = 純需要${Math.max(0, product.forecastQuantity + product.safetyStock - product.currentStock)}`}
+                              rank={product.rank}
+                              safetyDays={product.safetyStock / (product.avgDailySales || 1)}
+                              algorithm={product.algorithm || 'simple'}
+                              confidence={0.7}
+                            />
+                          </td>
                           <td className="px-2 py-1.5 text-right text-gray-600 whitespace-nowrap text-xs">{product.safetyStock}</td>
                           <td className="px-2 py-1.5 text-right font-semibold text-[#0D4F4F] whitespace-nowrap text-xs">
                             {product.recommendedOrder}
