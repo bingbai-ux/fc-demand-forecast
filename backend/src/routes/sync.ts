@@ -151,7 +151,7 @@ router.post('/daily', async (req, res) => {
       productsCount: productsResult.count,
       stockCount: stockResult.count,
       salesCount: salesResult.count,
-      summaryCount: summaryCount,
+      summaryCount: salesResult.count,
     });
   } catch (error: any) {
     console.error('❌ 自動同期エラー:', error.message);
@@ -200,7 +200,7 @@ router.post('/build-summary', async (req, res) => {
       
       // 該当月の売上データを取得（ページネーション対応）
       const PAGE_SIZE = 1000;
-      let allSalesData = [];
+      let allSalesData: any[] = [];
       let from = 0;
       let hasMore = true;
       

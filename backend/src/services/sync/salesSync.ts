@@ -11,7 +11,7 @@ export async function updateDailySummaryForDate(dateStr: string): Promise<number
   
   // 該当日の売上データを取得（ページネーション対応）
   const PAGE_SIZE = 1000;
-  let allSalesData = [];
+  let allSalesData: any[] = [];
   let from = 0;
   let hasMore = true;
   
