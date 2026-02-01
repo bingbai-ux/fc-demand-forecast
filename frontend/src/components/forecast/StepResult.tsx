@@ -2,9 +2,7 @@ import React, { useState, useMemo } from 'react';
 import OrderSummary from './OrderSummary';
 import ProductDetailModal from './ProductDetailModal';
 import StockoutCostDashboard from './StockoutCostDashboard';
-import { AlgorithmBadge } from '../ForecastTable/AlgorithmBadge';
-import { RankBadge } from '../ForecastTable/RankBadge';
-import { OrderBreakdownTooltip } from '../ForecastTable/OrderBreakdownTooltip';
+import { AlgorithmBadge, RankBadge, OrderBreakdown } from '../ForecastTable/SimpleBadges';
 
 interface PastSale {
   date?: string;
@@ -842,13 +840,18 @@ const StepResult: React.FC<StepResultProps> = ({
                               boxShadow: '2px 0 4px rgba(0,0,0,0.05)',
                             }}
                           >
-                            <div className="font-medium text-sm" title={product.productName}>
-                              <span className="truncate max-w-[140px] inline-block align-middle">
+                            <div style={{ fontWeight: 500, fontSize: '14px' }} title={product.productName}>
+                              <span style={{ 
+                                display: 'inline-block', 
+                                maxWidth: '140px',
+                                overflow: 'hidden',
+                                textOverflow: 'ellipsis',
+                                whiteSpace: 'nowrap',
+                                verticalAlign: 'middle'
+                              }}>
                                 {product.productName}
                               </span>
-                              <span className="inline-block align-middle ml-1">
-                                <AlgorithmBadge algorithm={product.algorithm || 'simple'} />
-                              </span>
+                              <AlgorithmBadge algorithm={product.algorithm || 'simple'} />
                             </div>
                           </td>
                           <td className="px-2 py-1.5 text-right text-gray-600 whitespace-nowrap text-xs">¥{product.cost?.toLocaleString() || '-'}</td>
@@ -864,12 +867,8 @@ const StepResult: React.FC<StepResultProps> = ({
                             );
                           })}
                           <td className="px-2 py-1.5 text-right whitespace-nowrap text-xs">
-                            <OrderBreakdownTooltip 
+                            <OrderBreakdown 
                               breakdown={`予測${product.forecastQuantity} + 安全${product.safetyStock} - 在庫${product.currentStock} = 純需要${Math.max(0, product.forecastQuantity + product.safetyStock - product.currentStock)}`}
-                              rank={product.rank}
-                              safetyDays={product.safetyStock / (product.avgDailySales || 1)}
-                              algorithm={product.algorithm || 'simple'}
-                              confidence={0.7}
                             />
                           </td>
                           <td className="px-2 py-1.5 text-right text-gray-600 whitespace-nowrap text-xs">{product.safetyStock}</td>
