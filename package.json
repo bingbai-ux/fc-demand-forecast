@@ -1,5 +1,9 @@
 {
   "name": "fc-demand-forecast",
   "version": "1.0.0",
-  "private": true
+  "private": true,
+  "dependencies": {
+    "@supabase/supabase-js": "^2.93.3",
+    "dotenv": "^17.2.3"
+  }
 }

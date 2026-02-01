@@ -141,8 +141,7 @@ router.post('/daily', async (req, res) => {
     const salesResult = await syncSalesForDate(dateStr);
     console.log(`   売上: ${salesResult.count}件`);
     
-    // 4. 集計テーブルを更新（昨日分）
-    const summaryCount = await updateDailySummaryForDate(dateStr);
+    // 4. 集計テーブルは syncSalesForDate 内部で既に更新済みなのでスキップ
     
     console.log('✅ 毎日の自動同期完了');
     
@@ -199,28 +198,45 @@ router.post('/build-summary', async (req, res) => {
       
       console.log(`   処理中: ${monthStart} 〜 ${actualEnd}`);
       
-      // 該当月の売上データを取得
-      const { data: salesData, error: salesError } = await supabase
-        .from('sales_cache')
-        .select('product_id, store_id, sale_date, quantity, sales_amount, cost_amount')
-        .gte('sale_date', monthStart)
-        .lte('sale_date', actualEnd + 'T23:59:59');
+      // 該当月の売上データを取得（ページネーション対応）
+      const PAGE_SIZE = 1000;
+      let allSalesData = [];
+      let from = 0;
+      let hasMore = true;
       
-      if (salesError) {
-        console.error(`   エラー: ${salesError.message}`);
+      while (hasMore) {
+        const { data: salesData, error: salesError } = await supabase
+          .from('sales_cache')
+          .select('product_id, store_id, sale_date, quantity, sales_amount, cost_amount')
+          .gte('sale_date', monthStart)
+          .lte('sale_date', actualEnd + 'T23:59:59')
+          .range(from, from + PAGE_SIZE - 1);
+        
+        if (salesError) {
+          console.error(`   エラー: ${salesError.message}`);
+          break;
+        }
+        
+        if (salesData && salesData.length > 0) {
+          allSalesData = allSalesData.concat(salesData);
+          from += PAGE_SIZE;
+          hasMore = salesData.length === PAGE_SIZE;
+        } else {
+          hasMore = false;
+        }
+      }
+      
+      if (allSalesData.length === 0) {
         startDate.setMonth(startDate.getMonth() + 1);
         continue;
       }
       
-      if (!salesData || salesData.length === 0) {
-        startDate.setMonth(startDate.getMonth() + 1);
-        continue;
-      }
+      console.log(`   sales_cacheから ${allSalesData.length}件取得`);
       
       // 日次集計を計算
       const summaryMap = new Map<string, { product_id: string; store_id: string; sale_date: string; total_quantity: number; total_sales: number; total_cost: number }>();
       
-      for (const sale of salesData) {
+      for (const sale of allSalesData) {
         const saleDateStr = typeof sale.sale_date === 'string' ? sale.sale_date.split('T')[0] : sale.sale_date;
         const key = `${sale.product_id}_${sale.store_id}_${saleDateStr}`;
         

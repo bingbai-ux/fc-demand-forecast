@@ -9,27 +9,45 @@ import { smaregiClient } from '../smaregi/client';
 export async function updateDailySummaryForDate(dateStr: string): Promise<number> {
   console.log(`   📊 集計テーブルを更新中: ${dateStr}`);
   
-  // 該当日の売上データを取得
-  const { data: salesData, error: salesError } = await supabase
-    .from('sales_cache')
-    .select('product_id, store_id, sale_date, quantity, sales_amount, cost_amount')
-    .gte('sale_date', dateStr)
-    .lte('sale_date', dateStr + 'T23:59:59');
+  // 該当日の売上データを取得（ページネーション対応）
+  const PAGE_SIZE = 1000;
+  let allSalesData = [];
+  let from = 0;
+  let hasMore = true;
   
-  if (salesError) {
-    console.error(`   集計エラー: ${salesError.message}`);
-    return 0;
+  while (hasMore) {
+    const { data: salesData, error: salesError } = await supabase
+      .from('sales_cache')
+      .select('product_id, store_id, sale_date, quantity, sales_amount, cost_amount')
+      .gte('sale_date', dateStr)
+      .lte('sale_date', dateStr + 'T23:59:59')
+      .range(from, from + PAGE_SIZE - 1);
+    
+    if (salesError) {
+      console.error(`   集計エラー: ${salesError.message}`);
+      return 0;
+    }
+    
+    if (salesData && salesData.length > 0) {
+      allSalesData = allSalesData.concat(salesData);
+      from += PAGE_SIZE;
+      hasMore = salesData.length === PAGE_SIZE;
+    } else {
+      hasMore = false;
+    }
   }
   
-  if (!salesData || salesData.length === 0) {
+  if (allSalesData.length === 0) {
     console.log(`   ${dateStr}の売上データなし`);
     return 0;
   }
   
+  console.log(`   sales_cacheから ${allSalesData.length}件取得`);
+  
   // 日次集計を計算
   const summaryMap = new Map<string, { product_id: string; store_id: string; sale_date: string; total_quantity: number; total_sales: number; total_cost: number }>();
   
-  for (const sale of salesData) {
+  for (const sale of allSalesData) {
     const saleDateStr = typeof sale.sale_date === 'string' ? sale.sale_date.split('T')[0] : sale.sale_date;
     const key = `${sale.product_id}_${sale.store_id}_${saleDateStr}`;
     
