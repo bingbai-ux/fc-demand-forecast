@@ -1,0 +1,1098 @@
+import { useState, useEffect, useCallback, useRef } from 'react';
+import { Play, Download, TrendingUp, ChevronDown, ChevronUp } from 'lucide-react';
+import ForecastTooltip from '../components/ForecastTooltip';
+
+// 型定義
+interface Store {
+  storeId: string;  // APIからは文字列として返される
+  storeName: string;
+}
+
+interface ForecastProduct {
+  productId: string;
+  productName: string;
+  brandName: string;
+  categoryName: string;
+  supplierName: string;
+  price: number;
+  cost: number;
+  currentStock: number;
+  avgDailySales: number;
+  forecastQuantity: number;
+  safetyStock: number;
+  recommendedOrder: number;
+  orderAmount: number;
+  rank: 'A' | 'B' | 'C' | 'D' | 'E';
+  pastSales: number[];
+  stdDev: number;
+  trendFactor: number;
+  weightedAvg: number;
+}
+
+interface SupplierGroup {
+  supplierName: string;
+  products: ForecastProduct[];
+  totalOrderQuantity: number;
+  totalOrderAmount: number;
+}
+
+interface AccuracyReport {
+  totalAccuracy: number;
+  byRank: { rank: string; accuracy: number; count: number }[];
+  byDayOfWeek: { day: string; accuracy: number }[];
+}
+
+interface AdjustmentFactors {
+  dayOfWeek: Record<string, number>;
+  rank: Record<string, number>;
+}
+
+// 複数選択ドロップダウンコンポーネント
+interface MultiSelectDropdownProps {
+  label: string;
+  options: { value: string; label: string }[];
+  selectedValues: string[];
+  onChange: (values: string[]) => void;
+  placeholder?: string;
+}
+
+const MultiSelectDropdown: React.FC<MultiSelectDropdownProps> = ({
+  label,
+  options,
+  selectedValues,
+  onChange,
+  placeholder = '全て',
+}) => {
+  const [isOpen, setIsOpen] = useState(false);
+  const dropdownRef = useRef<HTMLDivElement>(null);
+
+  // 外側クリックで閉じる
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      if (dropdownRef.current && !dropdownRef.current.contains(event.target as Node)) {
+        setIsOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, []);
+
+  const handleToggle = (value: string) => {
+    if (selectedValues.includes(value)) {
+      onChange(selectedValues.filter(v => v !== value));
+    } else {
+      onChange([...selectedValues, value]);
+    }
+  };
+
+  const handleSelectAll = () => {
+    if (selectedValues.length === options.length) {
+      onChange([]);
+    } else {
+      onChange(options.map(o => o.value));
+    }
+  };
+
+  const displayText = selectedValues.length === 0
+    ? placeholder
+    : selectedValues.length === options.length
+    ? '全て'
+    : `${selectedValues.length}件選択中`;
+
+  return (
+    <div className="relative" ref={dropdownRef}>
+      <label className="block text-sm font-medium text-gray-700 mb-1">{label}</label>
+      <button
+        type="button"
+        onClick={() => setIsOpen(!isOpen)}
+        className="w-full px-3 py-2 border rounded-lg text-left bg-white flex justify-between items-center focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+      >
+        <span className={selectedValues.length === 0 ? 'text-gray-400' : ''}>
+          {displayText}
+        </span>
+        <svg className={`w-4 h-4 transition-transform ${isOpen ? 'rotate-180' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+        </svg>
+      </button>
+
+      {isOpen && (
+        <div className="absolute z-50 w-full mt-1 bg-white border rounded-lg shadow-lg max-h-60 overflow-auto">
+          {/* 全選択/クリア */}
+          <div className="sticky top-0 bg-gray-100 border-b px-3 py-2 flex items-center justify-between">
+            <label className="flex items-center gap-2 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={selectedValues.length === options.length && options.length > 0}
+                onChange={handleSelectAll}
+                className="rounded"
+              />
+              <span className="text-sm font-medium">全て選択</span>
+            </label>
+            <button
+              type="button"
+              onClick={() => onChange([])}
+              className="text-sm text-blue-600 hover:text-blue-800 font-medium"
+            >
+              クリア
+            </button>
+          </div>
+
+          {/* オプション一覧 */}
+          {options.map((option) => (
+            <label
+              key={option.value}
+              className="flex items-center gap-2 px-3 py-2 hover:bg-gray-50 cursor-pointer"
+            >
+              <input
+                type="checkbox"
+                checked={selectedValues.includes(option.value)}
+                onChange={() => handleToggle(option.value)}
+                className="rounded"
+              />
+              <span className="text-sm truncate">{option.label}</span>
+            </label>
+          ))}
+
+          {options.length === 0 && (
+            <div className="px-3 py-2 text-sm text-gray-400">データがありません</div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+};
+
+// ランク設定（サービスレベル方式）
+const RANK_CONFIG = {
+  A: { threshold: 0.20, serviceLevel: 0.99, zValue: 2.33 },
+  B: { threshold: 0.40, serviceLevel: 0.97, zValue: 1.88 },
+  C: { threshold: 0.60, serviceLevel: 0.95, zValue: 1.65 },
+  D: { threshold: 0.80, serviceLevel: 0.90, zValue: 1.28 },
+  E: { threshold: 1.00, serviceLevel: 0.85, zValue: 1.04 },
+};
+
+const API_BASE_URL = import.meta.env.VITE_API_URL || 'https://fc-demand-forecast-production.up.railway.app';
+
+// トレンド係数の計算
+function calculateTrendFactor(dailySales: number[]): number {
+  if (dailySales.length < 14) return 1.0;
+  
+  const recent = dailySales.slice(-14);
+  const older = dailySales.slice(-28, -14);
+  
+  const recentAvg = recent.reduce((a, b) => a + b, 0) / recent.length;
+  const olderAvg = older.length > 0 ? older.reduce((a, b) => a + b, 0) / older.length : recentAvg;
+  
+  if (olderAvg === 0) return 1.0;
+  
+  const factor = recentAvg / olderAvg;
+  return Math.max(0.7, Math.min(1.5, factor));
+}
+
+// 加重移動平均の計算
+function calculateWeightedAverage(dailySales: number[]): number {
+  if (dailySales.length === 0) return 0;
+  
+  const weights = dailySales.map((_, i) => {
+    const daysAgo = dailySales.length - i;
+    if (daysAgo <= 7) return 3.0;
+    if (daysAgo <= 14) return 2.0;
+    if (daysAgo <= 21) return 1.5;
+    if (daysAgo <= 30) return 1.0;
+    return 0.5;
+  });
+  
+  const weightedSum = dailySales.reduce((sum, val, i) => sum + val * weights[i], 0);
+  const weightSum = weights.reduce((a, b) => a + b, 0);
+  
+  return weightSum > 0 ? weightedSum / weightSum : 0;
+}
+
+export function DemandForecast() {
+  // 状態管理
+  const [stores, setStores] = useState<Store[]>([]);
+  const [categories, setCategories] = useState<string[]>([]);
+  const [suppliers, setSuppliers] = useState<string[]>([]);
+  const [selectedStores, setSelectedStores] = useState<string[]>([]);
+  const [selectedCategories, setSelectedCategories] = useState<string[]>([]);  // 複数選択に変更
+  const [selectedSuppliers, setSelectedSuppliers] = useState<string[]>([]);    // 複数選択に変更
+  
+  const [forecastUnit, setForecastUnit] = useState<'daily' | 'weekly' | 'monthly'>('weekly');
+  const [forecastPeriods, setForecastPeriods] = useState<number>(1);
+  const [startDate, setStartDate] = useState<string>('');
+  const [endDate, setEndDate] = useState<string>('');
+  
+  const [forecastResults, setForecastResults] = useState<ForecastProduct[]>([]);
+  const [supplierGroups, setSupplierGroups] = useState<SupplierGroup[]>([]);
+  const [groupBySupplier, setGroupBySupplier] = useState<boolean>(true);
+  
+  const [isLoading, setIsLoading] = useState<boolean>(false);
+  const [error, setError] = useState<string | null>(null);
+  
+  const [accuracyReport, setAccuracyReport] = useState<AccuracyReport | null>(null);
+  const [, setAdjustmentFactors] = useState<AdjustmentFactors | null>(null);
+  const [showAccuracyPanel, setShowAccuracyPanel] = useState<boolean>(false);
+  const [showFormulaDetail, setShowFormulaDetail] = useState<boolean>(false);
+  
+  const [pastPeriodLabels, setPastPeriodLabels] = useState<string[]>(['', '', '']);
+  const [expandedSuppliers, setExpandedSuppliers] = useState<Set<string>>(new Set());
+  const [forecastDays, setForecastDays] = useState<number>(7);
+
+  // 初期化
+  useEffect(() => {
+    const today = new Date();
+    const nextWeek = new Date(today);
+    nextWeek.setDate(today.getDate() + 7);
+    
+    setStartDate(nextWeek.toISOString().split('T')[0]);
+    
+    const endDateCalc = new Date(nextWeek);
+    endDateCalc.setDate(nextWeek.getDate() + 6);
+    setEndDate(endDateCalc.toISOString().split('T')[0]);
+    
+    fetchMasterData();
+    fetchAdjustmentFactors();
+    fetchAccuracyReport();
+  }, []);
+
+  // マスタデータ取得
+  const fetchMasterData = async () => {
+    try {
+      const [storesRes, categoriesRes, suppliersRes] = await Promise.all([
+        fetch(`${API_BASE_URL}/api/stores`),
+        fetch(`${API_BASE_URL}/api/categories`),
+        fetch(`${API_BASE_URL}/api/suppliers`),
+      ]);
+      
+      if (storesRes.ok) {
+        const storesData = await storesRes.json();
+        if (storesData.success && storesData.data) {
+          setStores(storesData.data);
+          setSelectedStores(storesData.data.map((s: Store) => s.storeId));
+        }
+      }
+      
+      if (categoriesRes.ok) {
+        const categoriesData = await categoriesRes.json();
+        if (categoriesData.success && categoriesData.data) {
+          setCategories(categoriesData.data.map((c: { categoryName: string }) => c.categoryName));
+        }
+      }
+      
+      if (suppliersRes.ok) {
+        const suppliersData = await suppliersRes.json();
+        console.log('仕入先データ:', suppliersData);
+        if (suppliersData.success) {
+          // APIは文字列の配列を直接返す
+          const supplierList = suppliersData.data || [];
+          console.log('仕入先リスト:', supplierList.length, '件');
+          setSuppliers(supplierList);
+        }
+      }
+    } catch (err) {
+      console.error('マスタデータ取得エラー:', err);
+    }
+  };
+
+  // 調整係数取得
+  const fetchAdjustmentFactors = async () => {
+    try {
+      const res = await fetch(`${API_BASE_URL}/api/forecast/adjustments`);
+      if (res.ok) {
+        const data = await res.json();
+        if (data.success) {
+          setAdjustmentFactors(data.adjustments);
+        }
+      }
+    } catch (err) {
+      console.error('調整係数取得エラー:', err);
+    }
+  };
+
+  // 精度レポート取得
+  const fetchAccuracyReport = async () => {
+    try {
+      const res = await fetch(`${API_BASE_URL}/api/forecast/accuracy-report`);
+      if (res.ok) {
+        const data = await res.json();
+        if (data.success && data.report) {
+          setAccuracyReport(data.report);
+        }
+      }
+    } catch (err) {
+      console.error('精度レポート取得エラー:', err);
+    }
+  };
+
+  // 店舗の短縮名を取得
+  const getShortName = (storeName: string): string => {
+    if (storeName.includes('ニュウマン新宿')) return '新宿';
+    if (storeName.includes('湘南')) return '湘南';
+    if (storeName.includes('学芸大学')) return '学大';
+    if (storeName.includes('代官山')) return '代官山';
+    if (storeName.includes('YYYard cafe')) return 'YYcafe';
+    if (storeName.includes('YYYard')) return 'YYYard';
+    return storeName.slice(0, 6);
+  };
+
+  // 予測計算
+  const calculateForecast = useCallback(async () => {
+    if (selectedStores.length === 0) {
+      setError('店舗を選択してください');
+      return;
+    }
+
+    setIsLoading(true);
+    setError(null);
+
+    try {
+      // 過去データの期間を計算（3期間分）
+      const start = new Date(startDate);
+      const periodDays = forecastUnit === 'daily' ? 1 : forecastUnit === 'weekly' ? 7 : 30;
+      const lookbackDays = periodDays * 3;
+      
+      // 予測期間の日数を保存
+      const calculatedForecastDays = periodDays * forecastPeriods;
+      setForecastDays(calculatedForecastDays);
+      
+      const historyEnd = new Date(start);
+      historyEnd.setDate(start.getDate() - 1);
+      const historyStart = new Date(historyEnd);
+      historyStart.setDate(historyEnd.getDate() - lookbackDays + 1);
+
+      // 過去期間のラベルを設定
+      const labels: string[] = [];
+      for (let i = 2; i >= 0; i--) {
+        const periodStart = new Date(historyEnd);
+        periodStart.setDate(historyEnd.getDate() - (i + 1) * periodDays + 1);
+        const periodEnd = new Date(historyEnd);
+        periodEnd.setDate(historyEnd.getDate() - i * periodDays);
+        labels.push(`${periodStart.getMonth() + 1}/${periodStart.getDate()}〜${periodEnd.getMonth() + 1}/${periodEnd.getDate()}`);
+      }
+      setPastPeriodLabels(labels);
+
+      // 売上データ取得
+      const params = new URLSearchParams({
+        from: historyStart.toISOString().split('T')[0],
+        to: historyEnd.toISOString().split('T')[0],
+        storeIds: selectedStores.join(','),
+      });
+
+      const res = await fetch(`${API_BASE_URL}/api/forecast/sales-with-products?${params}`);
+      if (!res.ok) {
+        throw new Error('データの取得に失敗しました');
+      }
+
+      const data = await res.json();
+      if (!data.success) {
+        throw new Error(data.error || 'データの取得に失敗しました');
+      }
+
+      const products = data.products || [];
+      
+      // デバッグログ
+      console.log('=== フィルタリング開始 ===');
+      console.log('全商品数:', products.length);
+      console.log('選択カテゴリ:', selectedCategories);
+      console.log('選択仕入先:', selectedSuppliers);
+      
+      if (products.length > 0) {
+        const sample = products[0];
+        console.log('サンプル商品:', {
+          productName: sample.productName,
+          categoryName: sample.categoryName,
+          supplierName: sample.supplierName,
+        });
+      }
+      
+      // フィルタリング（複数選択対応）
+      let filteredProducts = products;
+      
+      // カテゴリフィルター（空配列 = 全て選択）
+      if (selectedCategories.length > 0) {
+        filteredProducts = filteredProducts.filter((p: any) => {
+          const productCategory = (p.categoryName || '').trim();
+          const match = selectedCategories.some(cat => cat.trim() === productCategory);
+          return match;
+        });
+        console.log('カテゴリフィルター後:', filteredProducts.length, '件');
+      }
+      
+      // 仕入先フィルター（空配列 = 全て選択）
+      if (selectedSuppliers.length > 0) {
+        filteredProducts = filteredProducts.filter((p: any) => {
+          const productSupplier = (p.supplierName || '').trim();
+          const match = selectedSuppliers.some(sup => sup.trim() === productSupplier);
+          return match;
+        });
+        console.log('仕入先フィルター後:', filteredProducts.length, '件');
+      }
+      
+      console.log('最終フィルタリング結果:', filteredProducts.length, '件');
+
+      // 売上順にソート
+      filteredProducts.sort((a: any, b: any) => (b.totalSales || 0) - (a.totalSales || 0));
+
+      // 累積売上比率を計算してランク付け
+      const totalSales = filteredProducts.reduce((sum: number, p: any) => sum + (p.totalSales || 0), 0);
+      let cumulativeSales = 0;
+
+      const forecastProducts: ForecastProduct[] = filteredProducts.map((p: any) => {
+        cumulativeSales += p.totalSales || 0;
+        const cumulativeRatio = totalSales > 0 ? cumulativeSales / totalSales : 0;
+
+        // ランク決定
+        let rank: 'A' | 'B' | 'C' | 'D' | 'E' = 'E';
+        if (cumulativeRatio <= RANK_CONFIG.A.threshold) rank = 'A';
+        else if (cumulativeRatio <= RANK_CONFIG.B.threshold) rank = 'B';
+        else if (cumulativeRatio <= RANK_CONFIG.C.threshold) rank = 'C';
+        else if (cumulativeRatio <= RANK_CONFIG.D.threshold) rank = 'D';
+
+        // 日平均売上
+        const avgDailySales = lookbackDays > 0 ? (p.totalQuantity || 0) / lookbackDays : 0;
+
+        // 標準偏差（簡易計算）
+        const dailySales = p.dailySales || [];
+        const mean = avgDailySales;
+        const variance = dailySales.length > 0
+          ? dailySales.reduce((sum: number, s: number) => sum + Math.pow(s - mean, 2), 0) / dailySales.length
+          : Math.pow(avgDailySales * 0.3, 2);
+        const stdDev = Math.sqrt(variance);
+
+        // トレンド係数と加重移動平均を計算
+        const trendFactor = calculateTrendFactor(dailySales);
+        const weightedAvg = dailySales.length > 0 ? calculateWeightedAverage(dailySales) : avgDailySales;
+
+        // 予測売数（加重移動平均 + トレンド）
+        const forecastQuantity = Math.round(weightedAvg * calculatedForecastDays * trendFactor);
+
+        // 安全在庫（サービスレベル方式）
+        const zValue = RANK_CONFIG[rank].zValue;
+        const safetyStock = Math.round(zValue * stdDev * Math.sqrt(calculatedForecastDays));
+
+        // 推奨発注数
+        // 表示用は実際の在庫数（マイナス含む）、計算用はマイナスの場合は0として扱う
+        const currentStock = p.stockTotal || 0;  // 表示用（マイナスもそのまま表示）
+        const stockForCalculation = Math.max(0, currentStock);  // 計算用（マイナスは0として扱う）
+        const recommendedOrder = Math.max(0, forecastQuantity + safetyStock - stockForCalculation);
+
+        // 発注金額
+        const orderAmount = recommendedOrder * (p.cost || 0);
+
+        // 過去3期間の売上
+        const pastSales: number[] = [];
+        for (let i = 0; i < 3; i++) {
+          const periodSales = Math.round(avgDailySales * periodDays);
+          pastSales.push(periodSales > 0 ? periodSales : 0);
+        }
+
+        return {
+          productId: p.productId,
+          productName: p.productName,
+          brandName: p.brandName || '-',
+          categoryName: p.categoryName || '-',
+          supplierName: p.supplierName || '-',
+          price: p.price || 0,
+          cost: p.cost || 0,
+          currentStock,
+          avgDailySales: parseFloat(avgDailySales.toFixed(1)),
+          forecastQuantity,
+          safetyStock,
+          recommendedOrder,
+          orderAmount,
+          rank,
+          pastSales,
+          stdDev,
+          trendFactor,
+          weightedAvg,
+        };
+      });
+
+      // 発注が必要な商品のみフィルタ
+      const productsWithOrder = forecastProducts.filter(p => p.recommendedOrder > 0);
+
+      setForecastResults(productsWithOrder);
+
+      // 仕入先ごとにグループ化
+      const groups: Record<string, ForecastProduct[]> = {};
+      productsWithOrder.forEach(p => {
+        const supplier = p.supplierName || '未設定';
+        if (!groups[supplier]) groups[supplier] = [];
+        groups[supplier].push(p);
+      });
+
+      const supplierGroupsArray: SupplierGroup[] = Object.entries(groups).map(([name, prods]) => ({
+        supplierName: name,
+        products: prods,
+        totalOrderQuantity: prods.reduce((sum, p) => sum + p.recommendedOrder, 0),
+        totalOrderAmount: prods.reduce((sum, p) => sum + p.orderAmount, 0),
+      }));
+
+      // 発注金額順にソート
+      supplierGroupsArray.sort((a, b) => b.totalOrderAmount - a.totalOrderAmount);
+
+      setSupplierGroups(supplierGroupsArray);
+      
+      // 全ての仕入先を展開状態にする
+      setExpandedSuppliers(new Set(supplierGroupsArray.map(g => g.supplierName)));
+
+    } catch (err: any) {
+      setError(err.message || '予測計算中にエラーが発生しました');
+    } finally {
+      setIsLoading(false);
+    }
+  }, [selectedStores, selectedCategories, selectedSuppliers, startDate, endDate, forecastUnit, forecastPeriods]);
+
+  // 仕入先の展開/折りたたみ
+  const toggleSupplier = (supplierName: string) => {
+    setExpandedSuppliers(prev => {
+      const next = new Set(prev);
+      if (next.has(supplierName)) {
+        next.delete(supplierName);
+      } else {
+        next.add(supplierName);
+      }
+      return next;
+    });
+  };
+
+  // CSVダウンロード
+  const downloadCSV = (products: ForecastProduct[], filename: string) => {
+    const headers = [
+      '商品名', 'ブランド', 'カテゴリ', '仕入先', '単価', '原価', '在庫',
+      '日平均', '予測売数', '安全在庫', '推奨発注', '発注金額', 'ランク'
+    ];
+
+    const rows = products.map(p => [
+      p.productName,
+      p.brandName,
+      p.categoryName,
+      p.supplierName,
+      p.price,
+      p.cost,
+      p.currentStock,
+      p.avgDailySales,
+      p.forecastQuantity,
+      p.safetyStock,
+      p.recommendedOrder,
+      p.orderAmount,
+      p.rank,
+    ]);
+
+    const csvContent = '\uFEFF' + [headers, ...rows].map(row => row.join(',')).join('\n');
+    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = filename;
+    link.click();
+    URL.revokeObjectURL(url);
+  };
+
+  const downloadAllCSV = () => {
+    downloadCSV(forecastResults, `需要予測_全体_${startDate}_${endDate}.csv`);
+  };
+
+  const downloadSupplierCSV = (group: SupplierGroup) => {
+    downloadCSV(group.products, `需要予測_${group.supplierName}_${startDate}_${endDate}.csv`);
+  };
+
+  // 発注サマリー計算
+  const totalOrderQuantity = forecastResults.reduce((sum, p) => sum + p.recommendedOrder, 0);
+  const totalOrderAmount = forecastResults.reduce((sum, p) => sum + p.orderAmount, 0);
+
+  // テーブルヘッダーのレンダリング
+  const renderTableHeader = (includeSupplier: boolean = false) => (
+    <thead className="sticky top-0 z-10">
+      <tr className="text-xs">
+        {/* 商品情報（白背景） */}
+        <th className="px-3 py-2 text-left bg-white border-b border-r font-semibold min-w-[180px]">商品名</th>
+        <th className="px-3 py-2 text-left bg-white border-b border-r font-semibold min-w-[100px]">ブランド</th>
+        <th className="px-3 py-2 text-left bg-white border-b border-r font-semibold min-w-[100px]">カテゴリー</th>
+        {includeSupplier && (
+          <th className="px-3 py-2 text-left bg-white border-b border-r font-semibold min-w-[100px]">仕入先</th>
+        )}
+        
+        {/* 価格情報（グレー背景） */}
+        <th className="px-3 py-2 text-right bg-gray-100 border-b border-r font-semibold min-w-[70px]">単価</th>
+        <th className="px-3 py-2 text-right bg-gray-100 border-b border-r font-semibold min-w-[70px]">原価</th>
+        
+        {/* 在庫（青背景） */}
+        <th className="px-3 py-2 text-right bg-blue-50 border-b border-r font-semibold min-w-[60px]">
+          <div className="flex flex-col items-end">
+            <span>在庫</span>
+            <span className="text-[10px] text-gray-500 font-normal">※前回更新時点</span>
+          </div>
+        </th>
+        
+        {/* 過去売上（薄い緑背景） */}
+        <th className="px-3 py-2 text-right bg-green-50 border-b border-r font-semibold min-w-[80px]">{pastPeriodLabels[0]}</th>
+        <th className="px-3 py-2 text-right bg-green-50 border-b border-r font-semibold min-w-[80px]">{pastPeriodLabels[1]}</th>
+        <th className="px-3 py-2 text-right bg-green-50 border-b border-r font-semibold min-w-[80px]">{pastPeriodLabels[2]}</th>
+        
+        {/* 予測情報（黄色背景） */}
+        <th className="px-3 py-2 text-right bg-yellow-50 border-b border-r font-semibold min-w-[60px]">日平均</th>
+        <th className="px-3 py-2 text-right bg-yellow-50 border-b border-r font-semibold min-w-[70px]">予測売数</th>
+        <th className="px-3 py-2 text-right bg-yellow-50 border-b border-r font-semibold min-w-[70px]">安全在庫</th>
+        
+        {/* 発注情報（黄色背景） */}
+        <th className="px-3 py-2 text-right bg-yellow-100 border-b border-r font-semibold min-w-[70px]">推奨発注</th>
+        <th className="px-3 py-2 text-right bg-yellow-100 border-b border-r font-semibold min-w-[90px]">発注金額</th>
+        
+        {/* ランク（薄緑背景） */}
+        <th className="px-3 py-2 text-center bg-green-50 border-b font-semibold min-w-[60px]">ランク</th>
+      </tr>
+    </thead>
+  );
+
+  // テーブル行のレンダリング
+  const renderTableRow = (p: ForecastProduct, idx: number, includeSupplier: boolean = false) => (
+    <tr 
+      key={p.productId} 
+      className={`text-xs hover:bg-blue-50/50 ${idx % 2 === 0 ? 'bg-white' : 'bg-gray-50'}`}
+    >
+      {/* 商品情報 */}
+      <td className="px-3 py-2 text-left border-b border-r font-medium truncate max-w-[180px]" title={p.productName}>
+        {p.productName}
+      </td>
+      <td className="px-3 py-2 text-left border-b border-r text-gray-600 truncate max-w-[100px]" title={p.brandName}>
+        {p.brandName || '-'}
+      </td>
+      <td className="px-3 py-2 text-left border-b border-r text-gray-600 truncate max-w-[100px]" title={p.categoryName}>
+        {p.categoryName || '-'}
+      </td>
+      {includeSupplier && (
+        <td className="px-3 py-2 text-left border-b border-r text-gray-600 truncate max-w-[100px]" title={p.supplierName}>
+          {p.supplierName || '-'}
+        </td>
+      )}
+      
+      {/* 価格情報 */}
+      <td className="px-3 py-2 text-right border-b border-r">
+        ¥{p.price.toLocaleString()}
+      </td>
+      <td className="px-3 py-2 text-right border-b border-r">
+        ¥{p.cost.toLocaleString()}
+      </td>
+      
+      {/* 在庫 */}
+      <td className={`px-3 py-2 text-right border-b border-r ${p.currentStock < 0 ? 'text-red-600' : ''}`}>
+        {p.currentStock}
+      </td>
+      
+      {/* 過去売上 */}
+      {p.pastSales.map((sales, i) => (
+        <td key={i} className="px-3 py-2 text-right border-b border-r">
+          {sales}
+        </td>
+      ))}
+      
+      {/* 予測情報 */}
+      <td className="px-3 py-2 text-right border-b border-r">
+        {p.avgDailySales}
+      </td>
+      <td className="px-3 py-2 text-right border-b border-r">
+        <ForecastTooltip
+          product={{
+            productName: p.productName,
+            avgDailySales: p.avgDailySales,
+            forecastQuantity: p.forecastQuantity,
+            safetyStock: p.safetyStock,
+            recommendedOrder: p.recommendedOrder,
+            currentStock: p.currentStock,
+            rank: p.rank,
+            stdDev: p.stdDev,
+            trendFactor: p.trendFactor,
+            weightedAvg: p.weightedAvg,
+          }}
+          forecastDays={forecastDays}
+        >
+          <span className="cursor-help underline decoration-dotted">
+            {p.forecastQuantity}
+          </span>
+        </ForecastTooltip>
+      </td>
+      <td className="px-3 py-2 text-right border-b border-r">
+        {p.safetyStock}
+      </td>
+      
+      {/* 発注情報 */}
+      <td className="px-3 py-2 text-right border-b border-r font-semibold text-blue-600">
+        {p.recommendedOrder}
+      </td>
+      <td className="px-3 py-2 text-right border-b border-r font-semibold">
+        ¥{p.orderAmount.toLocaleString()}
+      </td>
+      
+      {/* ランク */}
+      <td className="px-3 py-2 text-center border-b">
+        <span className={`px-2 py-0.5 rounded text-xs font-medium ${
+          p.rank === 'A' ? 'bg-red-100 text-red-700' :
+          p.rank === 'B' ? 'bg-orange-100 text-orange-700' :
+          p.rank === 'C' ? 'bg-yellow-100 text-yellow-700' :
+          p.rank === 'D' ? 'bg-green-100 text-green-700' :
+          'bg-gray-100 text-gray-700'
+        }`}>
+          {p.rank}
+        </span>
+      </td>
+    </tr>
+  );
+
+  return (
+    <div className="p-6">
+      {/* ヘッダー */}
+      <div className="flex justify-between items-center mb-6">
+        <h1 className="text-2xl font-bold text-gray-800">需要予測</h1>
+        <button
+          onClick={calculateForecast}
+          disabled={isLoading}
+          className="flex items-center gap-2 px-6 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50"
+        >
+          <Play className="w-5 h-5" />
+          {isLoading ? '計算中...' : '予測を実行'}
+        </button>
+      </div>
+
+      {/* エラー表示 */}
+      {error && (
+        <div className="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded-lg mb-6">
+          {error}
+        </div>
+      )}
+
+      {/* 精度パネル */}
+      {showAccuracyPanel && accuracyReport && (
+        <div className="bg-white rounded-lg shadow p-4 mb-6">
+          <div className="flex items-center justify-between mb-4">
+            <h2 className="text-lg font-semibold flex items-center gap-2">
+              <TrendingUp className="w-5 h-5" />
+              予測精度レポート
+            </h2>
+            <button
+              onClick={() => setShowAccuracyPanel(false)}
+              className="text-gray-400 hover:text-gray-600"
+            >
+              ✕
+            </button>
+          </div>
+          <div className="text-center mb-4">
+            <span className="text-4xl font-bold text-blue-600">{accuracyReport.totalAccuracy.toFixed(1)}%</span>
+            <span className="text-gray-500 ml-2">全体精度</span>
+          </div>
+          <div className="grid grid-cols-2 gap-4">
+            <div>
+              <h4 className="text-sm font-medium mb-2">ランク別精度</h4>
+              {accuracyReport.byRank.map(r => (
+                <div key={r.rank} className="flex justify-between text-sm">
+                  <span>ランク {r.rank}</span>
+                  <span>{r.accuracy.toFixed(1)}% ({r.count}件)</span>
+                </div>
+              ))}
+            </div>
+            <div>
+              <h4 className="text-sm font-medium mb-2">曜日別精度</h4>
+              {accuracyReport.byDayOfWeek.map(d => (
+                <div key={d.day} className="flex justify-between text-sm">
+                  <span>{d.day}</span>
+                  <span>{d.accuracy.toFixed(1)}%</span>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 予測条件 */}
+      <div className="bg-white rounded-lg shadow p-4 mb-6">
+        <h2 className="text-lg font-semibold mb-4">予測条件</h2>
+        
+        <div className="grid grid-cols-4 gap-4 mb-4">
+          {/* 予測単位 */}
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">予測単位</label>
+            <select
+              value={forecastUnit}
+              onChange={(e) => setForecastUnit(e.target.value as 'daily' | 'weekly' | 'monthly')}
+              className="w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+            >
+              <option value="daily">日次</option>
+              <option value="weekly">週次</option>
+              <option value="monthly">月次</option>
+            </select>
+          </div>
+          
+          {/* 予測期間 */}
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">予測期間（週）</label>
+            <select
+              value={forecastPeriods}
+              onChange={(e) => setForecastPeriods(parseInt(e.target.value))}
+              className="w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+            >
+              <option value={1}>1</option>
+              <option value={2}>2</option>
+              <option value={3}>3</option>
+              <option value={4}>4</option>
+            </select>
+          </div>
+          
+          {/* 開始日 */}
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">開始日</label>
+            <input
+              type="date"
+              value={startDate}
+              onChange={(e) => setStartDate(e.target.value)}
+              className="w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+            />
+          </div>
+          
+          {/* 終了日 */}
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">終了日</label>
+            <input
+              type="date"
+              value={endDate}
+              onChange={(e) => setEndDate(e.target.value)}
+              className="w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+            />
+          </div>
+        </div>
+
+        <div className="grid grid-cols-3 gap-4">
+          {/* 対象店舗 */}
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">対象店舗</label>
+            <div className="flex flex-wrap gap-2">
+              <button
+                onClick={() => setSelectedStores(stores.map(s => s.storeId))}
+                className={`px-3 py-1 rounded text-sm ${
+                  selectedStores.length === stores.length ? 'bg-blue-600 text-white' : 'bg-gray-100 hover:bg-gray-200'
+                }`}
+              >
+                全店舗
+              </button>
+              {stores.map(store => (
+                <label key={store.storeId} className="flex items-center gap-1">
+                  <input
+                    type="checkbox"
+                    checked={selectedStores.includes(store.storeId)}
+                    onChange={(e) => {
+                      if (e.target.checked) {
+                        setSelectedStores([...selectedStores, store.storeId]);
+                      } else {
+                        setSelectedStores(selectedStores.filter(id => id !== store.storeId));
+                      }
+                    }}
+                    className="rounded text-blue-600"
+                  />
+                  <span className="text-sm">{getShortName(store.storeName)}</span>
+                </label>
+              ))}
+            </div>
+          </div>
+          
+          {/* カテゴリ（複数選択） */}
+          <MultiSelectDropdown
+            label="カテゴリ"
+            options={categories.map(c => ({
+              value: c,
+              label: c,
+            }))}
+            selectedValues={selectedCategories}
+            onChange={setSelectedCategories}
+            placeholder="全て"
+          />
+          
+          {/* 仕入先（複数選択） */}
+          <MultiSelectDropdown
+            label="仕入先"
+            options={suppliers.map(s => ({
+              value: s,
+              label: s,
+            }))}
+            selectedValues={selectedSuppliers}
+            onChange={setSelectedSuppliers}
+            placeholder="全て"
+          />
+        </div>
+      </div>
+
+      {/* 計算式パネル */}
+      <div className="bg-white rounded-lg shadow p-4 mb-6">
+        <div className="flex items-center justify-between mb-3">
+          <h2 className="font-semibold text-gray-700 flex items-center gap-2">
+            <span>📐</span> 予測計算式
+          </h2>
+          <button
+            onClick={() => setShowFormulaDetail(!showFormulaDetail)}
+            className="text-sm text-blue-600 hover:text-blue-800"
+          >
+            {showFormulaDetail ? '簡易表示' : '詳細を見る'}
+          </button>
+        </div>
+        
+        {/* 簡易表示 */}
+        <div className="text-sm text-gray-600 space-y-1">
+          <div className="flex items-center gap-2">
+            <span className="font-medium text-gray-800">予測売数</span>
+            <span>=</span>
+            <span>加重移動平均 × 予測日数 × トレンド係数</span>
+          </div>
+          <div className="flex items-center gap-2">
+            <span className="font-medium text-gray-800">推奨発注</span>
+            <span>=</span>
+            <span>予測売数 + 安全在庫 − 現在庫</span>
+          </div>
+          <div className="flex items-center gap-2">
+            <span className="font-medium text-gray-800">安全在庫</span>
+            <span>=</span>
+            <span>Z値(ランク別) × 標準偏差 × √予測日数</span>
+          </div>
+        </div>
+        
+        {/* 詳細表示 */}
+        {showFormulaDetail && (
+          <div className="mt-4 pt-4 border-t">
+            <div className="grid grid-cols-2 gap-4 text-sm">
+              <div>
+                <h4 className="font-medium mb-2">加重移動平均の重み</h4>
+                <ul className="text-gray-600 space-y-1">
+                  <li>直近7日: 3.0倍</li>
+                  <li>8-14日前: 2.0倍</li>
+                  <li>15-21日前: 1.5倍</li>
+                  <li>22-30日前: 1.0倍</li>
+                  <li>31日以前: 0.5倍</li>
+                </ul>
+              </div>
+              <div>
+                <h4 className="font-medium mb-2">ランク別Z値（サービスレベル）</h4>
+                <ul className="text-gray-600 space-y-1">
+                  <li>A: 2.33 (99%)</li>
+                  <li>B: 1.88 (97%)</li>
+                  <li>C: 1.65 (95%)</li>
+                  <li>D: 1.28 (90%)</li>
+                  <li>E: 1.04 (85%)</li>
+                </ul>
+              </div>
+            </div>
+          </div>
+        )}
+      </div>
+
+      {/* 結果表示 */}
+      {forecastResults.length > 0 && (
+        <>
+          {/* 発注サマリー */}
+          <div className="bg-gradient-to-r from-blue-50 to-indigo-50 rounded-lg shadow p-4 mb-6">
+            <h2 className="text-lg font-semibold mb-4">発注サマリー</h2>
+            <div className="grid grid-cols-3 gap-4">
+              <div className="bg-white rounded-lg p-4 text-center">
+                <div className="text-sm text-gray-500">対象商品数</div>
+                <div className="text-2xl font-bold text-blue-600">{forecastResults.length} 件</div>
+              </div>
+              <div className="bg-white rounded-lg p-4 text-center">
+                <div className="text-sm text-gray-500">発注合計数</div>
+                <div className="text-2xl font-bold text-orange-600">{totalOrderQuantity.toLocaleString()} 個</div>
+              </div>
+              <div className="bg-white rounded-lg p-4 text-center">
+                <div className="text-sm text-gray-500">発注合計金額</div>
+                <div className="text-2xl font-bold text-green-600">¥{totalOrderAmount.toLocaleString()}</div>
+              </div>
+            </div>
+          </div>
+
+          {/* 発注推奨リスト */}
+          <div className="bg-white rounded-lg shadow">
+            <div className="p-4 border-b flex justify-between items-center">
+              <h2 className="text-lg font-semibold">発注推奨リスト</h2>
+              <div className="flex items-center gap-4">
+                <label className="flex items-center gap-2">
+                  <input
+                    type="checkbox"
+                    checked={groupBySupplier}
+                    onChange={(e) => setGroupBySupplier(e.target.checked)}
+                    className="rounded text-blue-600"
+                  />
+                  <span className="text-sm">仕入先ごとに表示</span>
+                </label>
+                <button
+                  onClick={downloadAllCSV}
+                  className="flex items-center gap-1 px-3 py-1 text-sm bg-gray-100 hover:bg-gray-200 rounded"
+                >
+                  <Download className="w-4 h-4" />
+                  全体CSVダウンロード
+                </button>
+              </div>
+            </div>
+
+            {groupBySupplier ? (
+              // 仕入先ごとに表示
+              <div>
+                {supplierGroups.map(group => (
+                  <div key={group.supplierName} className="border-b last:border-b-0">
+                    <div
+                      className="flex items-center justify-between p-3 bg-gray-50 cursor-pointer hover:bg-gray-100"
+                      onClick={() => toggleSupplier(group.supplierName)}
+                    >
+                      <div className="flex items-center gap-2">
+                        {expandedSuppliers.has(group.supplierName) ? (
+                          <ChevronUp className="w-4 h-4" />
+                        ) : (
+                          <ChevronDown className="w-4 h-4" />
+                        )}
+                        <span className="font-medium">{group.supplierName}</span>
+                        <span className="text-sm text-gray-500">（{group.products.length}件）</span>
+                      </div>
+                      <div className="flex items-center gap-4">
+                        <span className="text-sm">発注数: <span className="font-semibold text-orange-600">{group.totalOrderQuantity}</span> 個</span>
+                        <span className="text-sm">発注金額: <span className="font-semibold text-green-600">¥{group.totalOrderAmount.toLocaleString()}</span></span>
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            downloadSupplierCSV(group);
+                          }}
+                          className="flex items-center gap-1 px-2 py-1 text-xs bg-white border rounded hover:bg-gray-50"
+                        >
+                          CSV
+                        </button>
+                      </div>
+                    </div>
+                    {expandedSuppliers.has(group.supplierName) && (
+                      <div className="overflow-x-auto">
+                        <table className="w-full">
+                          {renderTableHeader(false)}
+                          <tbody>
+                            {group.products.map((p, idx) => renderTableRow(p, idx, false))}
+                          </tbody>
+                        </table>
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </div>
+            ) : (
+              // 全商品を一覧表示
+              <div className="overflow-x-auto">
+                <table className="w-full">
+                  {renderTableHeader(true)}
+                  <tbody>
+                    {forecastResults.map((p, idx) => renderTableRow(p, idx, true))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+        </>
+      )}
+
+      {/* 初期状態 */}
+      {forecastResults.length === 0 && !isLoading && !error && (
+        <div className="bg-white rounded-lg shadow p-8 text-center text-gray-500">
+          「予測を実行」ボタンをクリックして需要予測を開始してください
+        </div>
+      )}
+    </div>
+  );
+}

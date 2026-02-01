@@ -1,0 +1,7 @@
+logic,total_order_qty,total_order_amount,total_stock_value,avg_safety_stock,avg_days_covered,stockout_risk_count,stockout_risk_rate,overstock_count,overstock_rate,optimal_count,optimal_rate,active_products,total_products,potential_stockout_count,period
+現行ロジック,57,29516,61434,1.6,10.4,0,0.0,0,0.0,12,85.7,14,60,11,2025年6月
+最小限ロジック,39,20364,52282,0.0,8.8,0,0.0,0,0.0,13,92.9,14,60,11,2025年6月
+現行ロジック,29,14802,46720,0.77,17.3,0,0.0,1,6.7,7,46.7,15,60,9,2025年8月
+最小限ロジック,22,9776,41694,0.0,15.2,0,0.0,1,6.7,11,73.3,15,60,9,2025年8月
+現行ロジック,42,15512,47430,1.22,13.8,0,0.0,1,7.7,8,61.5,13,60,9,2025年12月
+最小限ロジック,29,11489,43407,0.0,12.9,0,0.0,1,7.7,8,61.5,13,60,9,2025年12月
