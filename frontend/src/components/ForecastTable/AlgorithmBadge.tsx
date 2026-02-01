@@ -1,5 +1,3 @@
-import React from 'react';
-
 interface AlgorithmBadgeProps {
   algorithm: 'arima' | 'simple' | 'ensemble';
   className?: string;

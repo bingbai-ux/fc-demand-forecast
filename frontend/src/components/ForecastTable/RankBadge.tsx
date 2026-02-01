@@ -1,5 +1,3 @@
-import React from 'react';
-
 interface RankBadgeProps {
   rank: 'A' | 'B' | 'C' | 'D' | 'E';
   className?: string;
