@@ -47,15 +47,18 @@ router.post('/calculate', async (req, res) => {
 
     const stockMap = new Map(stocks?.map((s: any) => [s.product_id, s.stock_amount]) || []);
 
-    // 3. 発注済未入庫データ取得（仮：仮発注テーブルから）
-    // 注: 実際のテーブル名は確認が必要
+    // 3. 発注済未入庫データ取得（purchase_ordersテーブルから）
     const { data: onOrders } = await prisma
-      .from('order_items')
+      .from('purchase_orders')
       .select('product_id, quantity')
       .eq('store_id', storeId)
       .eq('status', 'ordered');
 
-    const onOrderMap = new Map(onOrders?.map((o: any) => [o.product_id, o.quantity]) || []);
+    const onOrderMap = new Map();
+    onOrders?.forEach((o: any) => {
+      const current = onOrderMap.get(o.product_id) || 0;
+      onOrderMap.set(o.product_id, current + (o.quantity || 0));
+    });
 
     // 4. 過去売上データ取得（ABC分析用）
     const startDate = new Date(Date.now() - 60 * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
