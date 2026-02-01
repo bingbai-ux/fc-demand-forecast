@@ -396,12 +396,12 @@ export async function executeForecast(config: ForecastConfig) {
 
   // ── 5. 発注ロット ──
   const lotRaw = await fetchByProductIds(
-    'product_order_lots', 'product_id, order_lot',
+    'product_order_lots', 'product_id, lot_size',
     pids,
     (q) => q,
   );
   const lotMap = new Map<string, number>();
-  lotRaw.forEach((r: any) => lotMap.set(String(r.product_id), Number(r.order_lot) || 1));
+  lotRaw.forEach((r: any) => lotMap.set(String(r.product_id), Number(r.lot_size) || 1));
 
   // ── 6. 仕入先設定 ──
   const suppRaw = await fetchAll(
