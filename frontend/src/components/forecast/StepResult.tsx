@@ -2,7 +2,7 @@ import React, { useState, useMemo } from 'react';
 import OrderSummary from './OrderSummary';
 import ProductDetailModal from './ProductDetailModal';
 import StockoutCostDashboard from './StockoutCostDashboard';
-import { AlgorithmBadge, RankBadge, OrderBreakdown } from '../ForecastTable/SimpleBadges';
+import { AlgorithmBadge, RankBadge, OrderBreakdown, AlertIcon } from '../ForecastTable/SimpleBadges';
 
 interface PastSale {
   date?: string;
@@ -27,6 +27,7 @@ interface Product {
   orderAmount: number;
   rank: string;
   algorithm?: 'arima' | 'simple' | 'ensemble';
+  breakdown?: string;
   abcRank?: string;
   avgDailySales?: number;
   stockDays?: number;
@@ -43,6 +44,8 @@ interface Product {
   anomalySeverity?: 'high' | 'medium' | 'low' | null;
   alertFlags?: string[];
 }
+
+// getAlertIconはSimpleBadgesのAlertIconに移行済み
 
 interface SupplierSettings {
   leadTimeDays: number;
@@ -220,25 +223,6 @@ const StockoutCostDisplay: React.FC<StockoutCostDisplayProps> = ({ stockoutCost 
       </span>
     </div>
   );
-};
-
-// ========== 行スタイル・アイコンヘルパー ==========
-const getAlertIcon = (alertFlags?: string[]) => {
-  // 優先度順にチェック（欠品 > 在庫少 > 売上急増 > 在庫過剰）
-  if (alertFlags?.includes('stockout')) {
-    return <span title="欠品中" className="cursor-help">🔴</span>;
-  }
-  if (alertFlags?.includes('low_stock')) {
-    return <span title="在庫少" className="cursor-help">🟠</span>;
-  }
-  if (alertFlags?.includes('order_surge')) {
-    return <span title="売上急増" className="cursor-help">🟡</span>;
-  }
-  if (alertFlags?.includes('overstock')) {
-    return <span title="在庫過剰" className="cursor-help">🔵</span>;
-  }
-  // 異常なしの場合は適正（緑）
-  return <span title="適正" className="cursor-help">🟢</span>;
 };
 
 const StepResult: React.FC<StepResultProps> = ({
@@ -694,6 +678,9 @@ const StepResult: React.FC<StepResultProps> = ({
                   ランク{getSortIndicator('rank')}
                 </th>
                 <th className="px-1 py-2 text-center font-semibold whitespace-nowrap bg-white text-xs">
+                  予測方式
+                </th>
+                <th className="px-1 py-2 text-center font-semibold whitespace-nowrap bg-white text-xs">
                   状態
                 </th>
                 <th 
@@ -702,7 +689,7 @@ const StepResult: React.FC<StepResultProps> = ({
                     position: 'sticky',
                     left: 0,
                     zIndex: 20,
-                    minWidth: 160,
+                    minWidth: 200,
                     boxShadow: '2px 0 4px rgba(0,0,0,0.1)',
                   }}
                 >
@@ -720,7 +707,7 @@ const StepResult: React.FC<StepResultProps> = ({
                     {header}
                   </th>
                 ))}
-                <th className="px-1 py-2 text-right font-semibold whitespace-nowrap cursor-pointer hover:bg-gray-100 text-xs" onClick={() => handleSort('forecastQuantity')}>
+                <th className="px-1 py-2 text-center font-semibold whitespace-nowrap cursor-pointer hover:bg-gray-100 text-xs" onClick={() => handleSort('forecastQuantity')}>
                   予測{getSortIndicator('forecastQuantity')}
                 </th>
                 <th className="px-1 py-2 text-right font-semibold whitespace-nowrap cursor-pointer hover:bg-gray-100 text-xs" onClick={() => handleSort('safetyStock')}>
@@ -821,37 +808,40 @@ const StepResult: React.FC<StepResultProps> = ({
                           key={`${groupIdx}-${idx}`} 
                           className={`border-b border-gray-200 hover:bg-gray-100 ${isDiscontinued ? 'opacity-50' : ''} ${rowBg}`}
                         >
-                          {/* ランク - V2 Badge */}
+                          {/* ランク */}
                           <td className={`px-1 py-1.5 text-center whitespace-nowrap ${rowBg}`}>
                             <RankBadge rank={product.rank as 'A' | 'B' | 'C' | 'D' | 'E'} />
                           </td>
+                          {/* ARIMA/Simpleアルゴリズム */}
+                          <td className={`px-1 py-1.5 text-center whitespace-nowrap ${rowBg}`}>
+                            <AlgorithmBadge algorithm={product.algorithm || 'simple'} />
+                          </td>
                           {/* 状態（アラートアイコン） */}
                           <td className={`px-1 py-1.5 text-center whitespace-nowrap ${rowBg}`}>
-                            {getAlertIcon(product.alertFlags)}
+                            <AlertIcon alertFlags={product.alertFlags} />
                           </td>
-                          {/* 商品名 - sticky固定（カテゴリー非表示で高さ縮小） */}
+                          {/* 商品名 - sticky固定 */}
                           <td 
                             className={`px-3 py-1.5 border-r ${rowBg}`}
                             style={{
                               position: 'sticky',
                               left: 0,
                               zIndex: 5,
-                              minWidth: 180,
+                              minWidth: 200,
                               boxShadow: '2px 0 4px rgba(0,0,0,0.05)',
                             }}
                           >
-                            <div style={{ fontWeight: 500, fontSize: '14px' }} title={product.productName}>
-                              <span style={{ 
-                                display: 'inline-block', 
-                                maxWidth: '140px',
-                                overflow: 'hidden',
-                                textOverflow: 'ellipsis',
-                                whiteSpace: 'nowrap',
-                                verticalAlign: 'middle'
-                              }}>
-                                {product.productName}
-                              </span>
-                              <AlgorithmBadge algorithm={product.algorithm || 'simple'} />
+                            <div 
+                              style={{ 
+                                fontWeight: 500, 
+                                fontSize: '14px',
+                                whiteSpace: 'normal',
+                                wordBreak: 'break-word',
+                                lineHeight: '1.4'
+                              }} 
+                              title={product.productName}
+                            >
+                              {product.productName}
                             </div>
                           </td>
                           <td className="px-2 py-1.5 text-right text-gray-600 whitespace-nowrap text-xs">¥{product.cost?.toLocaleString() || '-'}</td>
@@ -866,9 +856,10 @@ const StepResult: React.FC<StepResultProps> = ({
                               </td>
                             );
                           })}
-                          <td className="px-2 py-1.5 text-right whitespace-nowrap text-xs">
+                          <td className="px-2 py-1.5 text-center whitespace-nowrap text-xs">
                             <OrderBreakdown 
-                              breakdown={`予測${product.forecastQuantity} + 安全${product.safetyStock} - 在庫${product.currentStock} = 純需要${Math.max(0, product.forecastQuantity + product.safetyStock - product.currentStock)}`}
+                              breakdown={product.breakdown || `予測${product.forecastQuantity} + 安全${product.safetyStock} - 在庫${product.currentStock} = 純需要${Math.max(0, product.forecastQuantity + product.safetyStock - product.currentStock)}`}
+                              netDemand={Math.max(0, product.forecastQuantity + product.safetyStock - product.currentStock)}
                             />
                           </td>
                           <td className="px-2 py-1.5 text-right text-gray-600 whitespace-nowrap text-xs">{product.safetyStock}</td>

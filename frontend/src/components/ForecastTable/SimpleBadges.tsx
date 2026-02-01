@@ -1,5 +1,5 @@
 /**
- * シンプルバッジコンポーネント
+ * シンプルバッジコンポーネント（ツールチップ付き）
  * Tailwind競合を避けてインラインCSSのみ使用
  */
 
@@ -9,6 +9,10 @@ interface AlgorithmBadgeProps {
 
 export function AlgorithmBadge({ algorithm }: AlgorithmBadgeProps) {
   const isArima = algorithm === 'arima';
+  const tooltip = isArima 
+    ? 'ARIMA: 時系列分析による高精度予測（季節性考慮）'
+    : 'Simple: 過去平均に基づく標準予測';
+    
   return (
     <span 
       style={{
@@ -19,8 +23,10 @@ export function AlgorithmBadge({ algorithm }: AlgorithmBadgeProps) {
         fontSize: '10px',
         marginLeft: '4px',
         display: 'inline-block',
-        fontWeight: 'bold'
+        fontWeight: 'bold',
+        cursor: 'help'
       }}
+      title={tooltip}
     >
       {isArima ? '🧠ARIMA' : '📊Simple'}
     </span>
@@ -41,6 +47,13 @@ export function RankBadge({ rank }: RankBadgeProps) {
   };
   
   const color = colors[rank] || colors['E'];
+  const tooltip = {
+    'A': 'Aランク: 最重要品（売上上位40%）',
+    'B': 'Bランク: 重要品（売上上位65%）',
+    'C': 'Cランク: 標準品（売上上位80%）',
+    'D': 'Dランク: 低優先品（売上上位92%）',
+    'E': 'Eランク: 最少品（それ以下）'
+  }[rank] || 'ランク情報なし';
   
   return (
     <span
@@ -52,8 +65,10 @@ export function RankBadge({ rank }: RankBadgeProps) {
         fontWeight: 'bold',
         fontSize: '12px',
         border: `1px solid ${color.border}`,
-        display: 'inline-block'
+        display: 'inline-block',
+        cursor: 'help'
       }}
+      title={tooltip}
     >
       {rank}
     </span>
@@ -62,9 +77,10 @@ export function RankBadge({ rank }: RankBadgeProps) {
 
 interface OrderBreakdownProps {
   breakdown: string;
+  netDemand: number;
 }
 
-export function OrderBreakdown({ breakdown }: OrderBreakdownProps) {
+export function OrderBreakdown({ breakdown, netDemand }: OrderBreakdownProps) {
   return (
     <span 
       style={{
@@ -73,7 +89,33 @@ export function OrderBreakdown({ breakdown }: OrderBreakdownProps) {
       }}
       title={breakdown}
     >
-      {breakdown.split(' = ')[1] || breakdown}
+      純需要{netDemand}
     </span>
   );
+}
+
+interface AlertIconProps {
+  alertFlags?: string[];
+}
+
+export function AlertIcon({ alertFlags }: AlertIconProps) {
+  if (!alertFlags || alertFlags.length === 0) {
+    return <span title="適正">🟢</span>;
+  }
+  
+  const hasStockout = alertFlags.includes('stockout');
+  const hasLowStock = alertFlags.includes('low_stock');
+  const hasSurge = alertFlags.includes('order_surge');
+  
+  if (hasStockout) {
+    return <span title="欠品中！">🔴</span>;
+  }
+  if (hasLowStock) {
+    return <span title="在庫少">🟡</span>;
+  }
+  if (hasSurge) {
+    return <span title="売上急増">📈</span>;
+  }
+  
+  return <span title={alertFlags.join(', ')}>⚠️</span>;
 }
