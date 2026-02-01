@@ -438,6 +438,22 @@ router.post('/calculate', async (req, res) => {
       else if (avgDailySales >= 0.5) rank = 'C';
       else if (avgDailySales > 0) rank = 'D';
       
+      // ABCランク別設定
+      const rankConfig: Record<string, { algorithm: string; safetyDays: number }> = {
+        'A': { algorithm: 'arima', safetyDays: 2 },
+        'B': { algorithm: 'arima', safetyDays: 1 },
+        'C': { algorithm: 'simple', safetyDays: 0.5 },
+        'D': { algorithm: 'simple', safetyDays: 0 },
+        'E': { algorithm: 'simple', safetyDays: 0 }
+      };
+      
+      const config = rankConfig[rank] || rankConfig['E'];
+      const algorithm = config.algorithm;
+      const safetyStockDays = config.safetyDays;
+      const safetyStock = Math.round(avgDailySales * safetyStockDays);
+      const netDemand = Math.max(0, forecastQuantity + safetyStock - currentStock);
+      const breakdown = `予測${forecastQuantity} + 安全${safetyStock} - 在庫${currentStock} = 純需要${netDemand}`;
+      
       // 過去売数を計算
       let pastSalesData: any[] = [];
       
@@ -501,13 +517,16 @@ router.post('/calculate', async (req, res) => {
         currentStock,
         avgDailySales: Math.round(avgDailySales * 100) / 100,
         forecastQuantity,
-        safetyStock: 0, // 安全在庫なし
+        safetyStock, // ABCランク別安全在庫
+        safetyStockDays, // 安全在庫日数
         recommendedOrder,
         orderAmount: Math.round(orderAmount),
         cost,
         retailPrice: parseFloat(product.price) || 0,
         lotSize,
         rank,
+        algorithm, // 'arima' or 'simple'
+        breakdown, // 計算内訳
         isActive,
         pastSales: {
           type: pastSalesType,
