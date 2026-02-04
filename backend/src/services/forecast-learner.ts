@@ -337,22 +337,40 @@ export async function learnParameters(storeId?: string): Promise<{
 }> {
   console.log('[Learner] パラメータ学習開始...');
 
-  // 直近8週間の精度データを取得
+  // 直近8週間の精度データを取得（ページネーション対応）
+  // Supabaseのmax_rows制限（デフォルト1000）を回避
   const eightWeeksAgo = addDaysStr(todayJST(), -56);
-  let query = supabase
-    .from(T_ACCURACY)
-    .select('*')
-    .gte('period_start', eightWeeksAgo)
-    .order('period_start', { ascending: true });
+  const PAGE_SIZE = 1000;
+  let accuracyData: any[] = [];
+  let offset = 0;
+  let hasMore = true;
 
-  if (storeId) query = query.eq('store_id', storeId);
+  while (hasMore) {
+    let query = supabase
+      .from(T_ACCURACY)
+      .select('*')
+      .gte('period_start', eightWeeksAgo)
+      .order('period_start', { ascending: true })
+      .range(offset, offset + PAGE_SIZE - 1);
 
-  const { data: accuracyData, error } = await query.limit(10000);
-  if (error) {
-    console.error('[Learner] 精度データ取得エラー:', error.message);
-    return { updated: 0, skipped: 0, avgMapeImprovement: 0 };
+    if (storeId) query = query.eq('store_id', storeId);
+
+    const { data, error } = await query;
+    if (error) {
+      console.error('[Learner] 精度データ取得エラー:', error.message);
+      return { updated: 0, skipped: 0, avgMapeImprovement: 0 };
+    }
+
+    if (data && data.length > 0) {
+      accuracyData.push(...data);
+      offset += PAGE_SIZE;
+      hasMore = data.length === PAGE_SIZE;
+    } else {
+      hasMore = false;
+    }
   }
-  if (!accuracyData || accuracyData.length === 0) {
+
+  if (accuracyData.length === 0) {
     console.log('[Learner] 精度データなし — 学習スキップ');
     return { updated: 0, skipped: 0, avgMapeImprovement: 0 };
   }
@@ -365,12 +383,33 @@ export async function learnParameters(storeId?: string): Promise<{
     groups.get(key)!.push(row);
   });
 
-  // 既存パラメータを取得
-  const { data: existingParams } = await supabase
-    .from(T_PARAMS)
-    .select('*');
+  // 既存パラメータを取得（ページネーション対応）
+  let existingParams: any[] = [];
+  let paramOffset = 0;
+  let paramHasMore = true;
+
+  while (paramHasMore) {
+    const { data, error: paramError } = await supabase
+      .from(T_PARAMS)
+      .select('*')
+      .range(paramOffset, paramOffset + PAGE_SIZE - 1);
+
+    if (paramError) {
+      console.error('[Learner] パラメータ取得エラー:', paramError.message);
+      break;
+    }
+
+    if (data && data.length > 0) {
+      existingParams.push(...data);
+      paramOffset += PAGE_SIZE;
+      paramHasMore = data.length === PAGE_SIZE;
+    } else {
+      paramHasMore = false;
+    }
+  }
+
   const paramMap = new Map<string, any>();
-  (existingParams || []).forEach((p: any) => {
+  existingParams.forEach((p: any) => {
     paramMap.set(`${p.store_id}|${p.product_id}`, p);
   });
 
@@ -646,15 +685,37 @@ export async function getAccuracySummary(storeId: string): Promise<{
 }> {
   const eightWeeksAgo = addDaysStr(todayJST(), -56);
 
-  const { data: accuracyData } = await supabase
-    .from(T_ACCURACY)
-    .select('*, forecast_snapshots!inner(abc_rank)')
-    .eq('store_id', storeId)
-    .gte('period_start', eightWeeksAgo)
-    .order('period_start', { ascending: true })
-    .limit(5000);
+  // ページネーション対応でデータを取得
+  // Supabaseのmax_rows制限（デフォルト1000）を回避
+  const PAGE_SIZE = 1000;
+  let accuracyData: any[] = [];
+  let offset = 0;
+  let hasMore = true;
 
-  if (!accuracyData || accuracyData.length === 0) {
+  while (hasMore) {
+    const { data, error } = await supabase
+      .from(T_ACCURACY)
+      .select('*, forecast_snapshots!inner(abc_rank)')
+      .eq('store_id', storeId)
+      .gte('period_start', eightWeeksAgo)
+      .order('period_start', { ascending: true })
+      .range(offset, offset + PAGE_SIZE - 1);
+
+    if (error) {
+      console.error('[Learner] 精度サマリー取得エラー:', error.message);
+      break;
+    }
+
+    if (data && data.length > 0) {
+      accuracyData.push(...data);
+      offset += PAGE_SIZE;
+      hasMore = data.length === PAGE_SIZE;
+    } else {
+      hasMore = false;
+    }
+  }
+
+  if (accuracyData.length === 0) {
     return {
       overall: { mape: 0, bias: 0, count: 0 },
       byRank: {},

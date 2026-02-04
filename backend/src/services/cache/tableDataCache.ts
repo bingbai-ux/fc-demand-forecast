@@ -147,34 +147,48 @@ async function fetchSalesFromSummary(
   return allData;
 }
 
-// 売上がある商品IDのセットを取得
+// 売上がある商品IDのセットを取得（ページネーション対応）
+// Supabaseのmax_rows制限（デフォルト1000）を回避
 async function getProductIdsWithSales(
   fromDate: string,
   toDate: string,
   storeIds?: string[]
 ): Promise<Set<string>> {
-  let query = supabase
-    .from('sales_daily_summary')
-    .select('product_id')
-    .gte('sale_date', fromDate)
-    .lte('sale_date', toDate);
-  
-  if (storeIds && storeIds.length > 0) {
-    // store_idは文字列型としてクエリ（テーブルの型に合わせる）
-    query = query.in('store_id', storeIds);
-  }
-  
-  const { data, error } = await query;
-  
-  if (error) {
-    throw new Error(`売上商品ID取得エラー: ${error.message}`);
-  }
-  
+  const PAGE_SIZE = 1000;
   const productIds = new Set<string>();
-  (data || []).forEach((item: any) => {
-    productIds.add(item.product_id);
-  });
-  
+  let from = 0;
+  let hasMore = true;
+
+  while (hasMore) {
+    let query = supabase
+      .from('sales_daily_summary')
+      .select('product_id')
+      .gte('sale_date', fromDate)
+      .lte('sale_date', toDate)
+      .range(from, from + PAGE_SIZE - 1);
+
+    if (storeIds && storeIds.length > 0) {
+      // store_idは文字列型としてクエリ（テーブルの型に合わせる）
+      query = query.in('store_id', storeIds);
+    }
+
+    const { data, error } = await query;
+
+    if (error) {
+      throw new Error(`売上商品ID取得エラー: ${error.message}`);
+    }
+
+    if (data && data.length > 0) {
+      data.forEach((item: any) => {
+        productIds.add(item.product_id);
+      });
+      from += PAGE_SIZE;
+      hasMore = data.length === PAGE_SIZE;
+    } else {
+      hasMore = false;
+    }
+  }
+
   return productIds;
 }
 
