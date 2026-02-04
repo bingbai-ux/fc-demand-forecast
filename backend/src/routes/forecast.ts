@@ -125,9 +125,15 @@ router.post('/calculate', async (req, res) => {
 // ════════════════════════════════════════════════
 // POST /learn — 手動で学習を実行
 // ════════════════════════════════════════════════
-router.post('/learn', async (_req, res) => {
+// クエリパラメータ:
+//   ?full=true — 曜日に関係なくフル学習を実行
+// デフォルト:
+//   日曜日: フル学習（精度評価 + パラメータ調整）
+//   それ以外: 精度評価のみ
+router.post('/learn', async (req, res) => {
   try {
-    const result = await runDailyLearning();
+    const forceFullLearning = req.query.full === 'true' || req.body?.full === true;
+    const result = await runDailyLearning(forceFullLearning);
     res.json({ success: true, ...result });
   } catch (error: any) {
     console.error('学習実行エラー:', error);

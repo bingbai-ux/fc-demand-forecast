@@ -96,6 +96,9 @@ const MAX_SAFETY_MULT = 2.0;     // 安全在庫倍率の上限
 const MIN_LEARNING_WEEKS = 3;    // 学習を適用するまでの最低週数
 const LOOKBACK_CANDIDATES = [14, 28, 42, 56]; // テストする参照日数
 
+/** 週次学習の実行曜日（0=日曜, 1=月曜, ..., 6=土曜） */
+const WEEKLY_LEARNING_DAY = 0;   // 日曜日に実行
+
 /** テーブル名 */
 const T_SNAPSHOTS = 'forecast_snapshots';
 const T_ACCURACY = 'forecast_accuracy';
@@ -639,31 +642,56 @@ export async function getLearnedParams(
 // ════════════════════════════════════════════════
 
 /**
- * 毎日の同期後に呼ばれるメインエントリポイント。
- * 1. 過去の予測精度を評価
- * 2. パラメータを再学習
- * 3. 結果をログ出力
+ * 今日が週次学習実行日かどうかを判定
  */
-export async function runDailyLearning(): Promise<{
+function isWeeklyLearningDay(): boolean {
+  const now = new Date();
+  const jst = new Date(now.getTime() + 9 * 60 * 60 * 1000);
+  return jst.getUTCDay() === WEEKLY_LEARNING_DAY;
+}
+
+/**
+ * 毎日の同期後に呼ばれるメインエントリポイント。
+ *
+ * 動作モード:
+ * - 毎日: 精度評価のみ実行（軽量）
+ * - 週次(日曜): 精度評価 + パラメータ学習（フル実行）
+ *
+ * @param forceFullLearning trueの場合、曜日に関係なくフル学習を実行
+ */
+export async function runDailyLearning(forceFullLearning: boolean = false): Promise<{
   accuracy: { evaluated: number; avgMape: number };
   learning: { updated: number; skipped: number; avgMapeImprovement: number };
 }> {
-  console.log('🧠 === 自動学習ジョブ開始 ===');
   const today = todayJST();
+  const isLearningDay = isWeeklyLearningDay();
+  const shouldRunFullLearning = forceFullLearning || isLearningDay;
 
-  // Step 1: 精度評価
+  console.log('🧠 === 自動学習ジョブ開始 ===');
+  console.log(`   日付: ${today}`);
+  console.log(`   モード: ${shouldRunFullLearning ? '週次フル学習' : '日次精度評価のみ'}`);
+
+  // Step 1: 精度評価（毎日実行）
   const metrics = await calculateAccuracy(today);
   const avgMape = metrics.length > 0
     ? round(metrics.reduce((s, m) => s + m.mape, 0) / metrics.length * 100, 1)
     : 0;
 
-  // Step 2: パラメータ学習
-  const learningResult = await learnParameters();
+  // Step 2: パラメータ学習（週次または強制実行時のみ）
+  let learningResult = { updated: 0, skipped: 0, avgMapeImprovement: 0 };
+  if (shouldRunFullLearning) {
+    console.log('📚 週次パラメータ学習を実行中...');
+    learningResult = await learnParameters();
+  } else {
+    console.log('⏭️ パラメータ学習はスキップ（次回学習日: 日曜日）');
+  }
 
   console.log('🧠 === 自動学習ジョブ完了 ===');
   console.log(`   精度評価: ${metrics.length}件, 平均MAPE: ${avgMape}%`);
-  console.log(`   パラメータ更新: ${learningResult.updated}件`);
-  console.log(`   平均改善: ${learningResult.avgMapeImprovement}%`);
+  if (shouldRunFullLearning) {
+    console.log(`   パラメータ更新: ${learningResult.updated}件`);
+    console.log(`   平均改善: ${learningResult.avgMapeImprovement}%`);
+  }
 
   return {
     accuracy: { evaluated: metrics.length, avgMape },
