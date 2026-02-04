@@ -452,6 +452,9 @@ router.get('/stockout-analysis/:storeId', async (req, res) => {
           daysChangePercent: 0,
           // デバッグ情報
           activeProductCount,
+          recentSalesCount: recentSalesIds.size,
+          stockWithPositive: productsWithStock.size,
+          stockCacheTotal: (allStockData || []).length,
           excludedCategories: DEFAULT_EXCLUDED_CATEGORY_IDS,
         },
         byRank,
