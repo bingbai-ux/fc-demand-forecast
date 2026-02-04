@@ -455,6 +455,14 @@ router.get('/stockout-analysis/:storeId', async (req, res) => {
           recentSalesCount: recentSalesIds.size,
           stockWithPositive: productsWithStock.size,
           stockCacheTotal: (allStockData || []).length,
+          // クエリパラメータ確認用
+          queryParams: {
+            storeId,
+            storeIdType: typeof storeId,
+            activeStartDate,
+            endDate,
+            recentSalesDataLength: (recentSalesData || []).length,
+          },
           excludedCategories: DEFAULT_EXCLUDED_CATEGORY_IDS,
         },
         byRank,
