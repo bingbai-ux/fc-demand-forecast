@@ -323,10 +323,12 @@ router.get('/stockout-analysis/:storeId', async (req, res) => {
 
     // Step 1: 全在庫データを取得
     // 注意: .eq()ではなく.in()を使用（型変換の違いで取得件数が異なる問題を回避）
+    // 注意: Supabaseのデフォルト上限は1000件なので、limitを明示的に指定
     const { data: allStockData } = await supabase
       .from('stock_cache')
       .select('product_id, stock_amount')
-      .in('store_id', [storeId]);
+      .in('store_id', [storeId])
+      .limit(10000);
 
     // Step 2: 直近N日に売上がある商品IDを取得（現行品判定用）
     // 注意: Supabaseのデフォルト上限は1000件なので、limitを明示的に指定
