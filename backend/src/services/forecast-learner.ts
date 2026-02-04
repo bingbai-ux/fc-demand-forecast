@@ -27,6 +27,13 @@
  */
 
 import { supabase } from '../config/supabase';
+import type {
+  ForecastSnapshot as DBForecastSnapshot,
+  ForecastAccuracy,
+  ProductForecastParams,
+  SalesDailySummary,
+  StockCache,
+} from '../types/database';
 
 // ════════════════════════════════════════════════
 // 型定義
@@ -185,7 +192,43 @@ export async function calculateAccuracy(
   // 実績売上を取得
   const metrics: AccuracyMetrics[] = [];
 
-  // store×period でグルーピングして効率的に取得
+  // ══════════════════════════════════════════════════════════════
+  // N+1問題解消: 全商品の実績売上を一括取得
+  // ══════════════════════════════════════════════════════════════
+
+  // 1. 全商品IDと期間の範囲を収集
+  const allProductIds = [...new Set(snapshots.map((s: any) => s.product_id))];
+  const allPeriodStarts = snapshots.map((s: any) => s.period_start);
+  const allPeriodEnds = snapshots.map((s: any) => s.period_end);
+  const minPeriodStart = allPeriodStarts.reduce((a, b) => a < b ? a : b);
+  const maxPeriodEnd = allPeriodEnds.reduce((a, b) => a > b ? a : b);
+  const allStoreIds = [...new Set(snapshots.map((s: any) => s.store_id))];
+
+  // 2. 一括で実績売上を取得（100件ずつチャンク）
+  let allActualSales: Array<{
+    product_id: string;
+    store_id: string;
+    sale_date: string;
+    total_quantity: number;
+  }> = [];
+
+  for (const storeId of allStoreIds) {
+    for (let i = 0; i < allProductIds.length; i += 100) {
+      const chunk = allProductIds.slice(i, i + 100);
+      const { data } = await supabase
+        .from('sales_daily_summary')
+        .select('product_id, store_id, sale_date, total_quantity')
+        .eq('store_id', storeId)
+        .in('product_id', chunk)
+        .gte('sale_date', minPeriodStart)
+        .lte('sale_date', maxPeriodEnd);
+      if (data) allActualSales = allActualSales.concat(data);
+    }
+  }
+
+  console.log(`[Learner] 実績売上データ取得: ${allActualSales.length}件`);
+
+  // 3. store×product×期間でグルーピング
   const groups = new Map<string, typeof snapshots>();
   snapshots.forEach((s: any) => {
     const key = `${s.store_id}|${s.period_start}|${s.period_end}`;
@@ -193,27 +236,20 @@ export async function calculateAccuracy(
     groups.get(key)!.push(s);
   });
 
+  // 4. 各グループの精度を計算
   for (const [key, snaps] of groups) {
     const [storeId, periodStart, periodEnd] = key.split('|');
-    const pids = snaps.map((s: any) => s.product_id);
 
-    // 実績売上を取得
-    let actualSales: any[] = [];
-    for (let i = 0; i < pids.length; i += 100) {
-      const chunk = pids.slice(i, i + 100);
-      const { data } = await supabase
-        .from('sales_daily_summary')
-        .select('product_id, total_quantity')
-        .eq('store_id', storeId)
-        .in('product_id', chunk)
-        .gte('sale_date', periodStart)
-        .lte('sale_date', periodEnd);
-      if (data) actualSales = actualSales.concat(data);
-    }
+    // このグループに該当する売上データをフィルタリング
+    const groupSales = allActualSales.filter(s =>
+      s.store_id === storeId &&
+      s.sale_date >= periodStart &&
+      s.sale_date <= periodEnd
+    );
 
     // 商品別合計
     const actualMap = new Map<string, number>();
-    actualSales.forEach((s: any) => {
+    groupSales.forEach((s) => {
       const pid = String(s.product_id);
       actualMap.set(pid, (actualMap.get(pid) || 0) + (Number(s.total_quantity) || 0));
     });
@@ -338,6 +374,44 @@ export async function learnParameters(storeId?: string): Promise<{
     paramMap.set(`${p.store_id}|${p.product_id}`, p);
   });
 
+  // ══════════════════════════════════════════════════════════════
+  // N+1問題解消: 全商品の在庫データを一括取得
+  // ══════════════════════════════════════════════════════════════
+  const allKeys = Array.from(groups.keys());
+  const productStoreMap = new Map<string, { storeId: string; productId: string }>();
+  allKeys.forEach(key => {
+    const [storeId, productId] = key.split('|');
+    productStoreMap.set(key, { storeId, productId });
+  });
+
+  // 店舗×商品の組み合わせで在庫を一括取得
+  const stockDataMap = new Map<string, number>();
+  const storeProductGroups = new Map<string, string[]>();
+
+  allKeys.forEach(key => {
+    const [storeId, productId] = key.split('|');
+    if (!storeProductGroups.has(storeId)) storeProductGroups.set(storeId, []);
+    storeProductGroups.get(storeId)!.push(productId);
+  });
+
+  for (const [storeId, productIds] of storeProductGroups) {
+    for (let i = 0; i < productIds.length; i += 100) {
+      const chunk = productIds.slice(i, i + 100);
+      const { data: stockBatch } = await supabase
+        .from('stock_cache')
+        .select('product_id, stock_amount')
+        .eq('store_id', storeId)
+        .in('product_id', chunk);
+
+      (stockBatch || []).forEach((row: any) => {
+        stockDataMap.set(`${storeId}|${row.product_id}`, row.stock_amount || 0);
+      });
+    }
+  }
+
+  console.log(`[Learner] 在庫データ一括取得: ${stockDataMap.size}件`);
+  // ══════════════════════════════════════════════════════════════
+
   const upsertRows: any[] = [];
   let skipped = 0;
   let totalMapeImproved = 0;
@@ -374,15 +448,8 @@ export async function learnParameters(storeId?: string): Promise<{
     }
 
     // ── 3b. 安全在庫倍率を計算 ──
-    // 在庫データから欠品頻度を推定
-    const { data: stockData } = await supabase
-      .from('stock_cache')
-      .select('stock_amount')
-      .eq('store_id', sid)
-      .eq('product_id', pid)
-      .single();
-
-    const currentStock = stockData?.stock_amount || 0;
+    // 在庫データは事前に一括取得済み
+    const currentStock = stockDataMap.get(key) || 0;
     const recentActuals = recentRecords.map((r: any) => r.actual || 0);
     const avgActual = recentActuals.reduce((a: number, b: number) => a + b, 0) / recentActuals.length;
     const avgDaily = avgActual / 7; // 週→日
@@ -448,13 +515,26 @@ export async function learnParameters(storeId?: string): Promise<{
     });
   }
 
-  // 一括保存
+  // 一括保存（並列化で高速化）
   if (upsertRows.length > 0) {
-    for (let i = 0; i < upsertRows.length; i += 500) {
-      await supabase.from(T_PARAMS).upsert(
-        upsertRows.slice(i, i + 500),
-        { onConflict: 'store_id,product_id' },
-      );
+    const upsertBatch = async (batch: typeof upsertRows): Promise<void> => {
+      const { error } = await supabase.from(T_PARAMS).upsert(batch, {
+        onConflict: 'store_id,product_id',
+      });
+      if (error) console.error('[Learner] パラメータ保存エラー:', error.message);
+    };
+
+    // 最大3並列で実行
+    const PARALLEL_LIMIT = 3;
+    const BATCH_SIZE = 500;
+    for (let i = 0; i < upsertRows.length; i += BATCH_SIZE * PARALLEL_LIMIT) {
+      const batchPromises: Promise<void>[] = [];
+      for (let j = 0; j < PARALLEL_LIMIT && i + j * BATCH_SIZE < upsertRows.length; j++) {
+        const start = i + j * BATCH_SIZE;
+        const batch = upsertRows.slice(start, start + BATCH_SIZE);
+        batchPromises.push(upsertBatch(batch));
+      }
+      await Promise.all(batchPromises);
     }
   }
 
