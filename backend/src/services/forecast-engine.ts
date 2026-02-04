@@ -195,8 +195,86 @@ function calcDowIndices(dailySales: Map<string, number>): number[] {
 }
 
 /**
+ * 外れ値を除去する（IQR法）
+ * 四分位範囲の1.5倍を超える値を除去
+ */
+function removeOutliers(values: number[]): number[] {
+  if (values.length < 4) return values;
+
+  const sorted = [...values].sort((a, b) => a - b);
+  const q1 = sorted[Math.floor(sorted.length * 0.25)];
+  const q3 = sorted[Math.floor(sorted.length * 0.75)];
+  const iqr = q3 - q1;
+  const lowerBound = q1 - 1.5 * iqr;
+  const upperBound = q3 + 1.5 * iqr;
+
+  return values.filter(v => v >= lowerBound && v <= upperBound);
+}
+
+/**
+ * トレンド係数を計算（線形回帰の傾き）
+ * 1.0 = トレンドなし、>1.0 = 上昇トレンド、<1.0 = 下降トレンド
+ */
+function calcTrendFactor(dailySales: Map<string, number>, endDate: string, lookbackDays: number): number {
+  const values: { x: number; y: number }[] = [];
+
+  for (let i = 0; i < lookbackDays; i++) {
+    const dateStr = addDays(endDate, -i);
+    const qty = dailySales.get(dateStr) ?? 0;
+    values.push({ x: lookbackDays - i, y: qty }); // x: 1=最古, lookbackDays=最新
+  }
+
+  if (values.length < 7) return 1.0; // データ不足
+
+  // 線形回帰
+  const n = values.length;
+  const sumX = values.reduce((s, v) => s + v.x, 0);
+  const sumY = values.reduce((s, v) => s + v.y, 0);
+  const sumXY = values.reduce((s, v) => s + v.x * v.y, 0);
+  const sumX2 = values.reduce((s, v) => s + v.x * v.x, 0);
+
+  const slope = (n * sumXY - sumX * sumY) / (n * sumX2 - sumX * sumX);
+  const avgY = sumY / n;
+
+  if (avgY === 0) return 1.0;
+
+  // 傾きを係数に変換（次の期間の予測に適用）
+  // 傾きがavgYの10%を超える場合のみトレンドを適用
+  const trendStrength = (slope * lookbackDays) / avgY;
+  if (Math.abs(trendStrength) < 0.1) return 1.0; // 弱いトレンドは無視
+
+  // トレンド係数を制限（0.7〜1.3の範囲）
+  return Math.max(0.7, Math.min(1.3, 1.0 + trendStrength * 0.5));
+}
+
+/**
+ * 中央値ベースのベースレートを計算（外れ値に頑健）
+ */
+function calcMedianBaseRate(dailySales: Map<string, number>, endDate: string, lookbackDays: number): number {
+  const values: number[] = [];
+
+  for (let i = 0; i < lookbackDays; i++) {
+    const dateStr = addDays(endDate, -i);
+    const qty = dailySales.get(dateStr) ?? 0;
+    values.push(qty);
+  }
+
+  // 外れ値を除去
+  const cleaned = removeOutliers(values);
+  if (cleaned.length === 0) return 0;
+
+  // 中央値を計算
+  const sorted = [...cleaned].sort((a, b) => a - b);
+  const mid = Math.floor(sorted.length / 2);
+  return sorted.length % 2 === 0
+    ? (sorted[mid - 1] + sorted[mid]) / 2
+    : sorted[mid];
+}
+
+/**
  * 直近 lookbackDays の指数加重平均で「ベースレート」（日販）を計算
  * 新しいデータほど重みが大きい。
+ * 改善版：外れ値除去とトレンド反映を追加
  *
  * @param dailySales Map<日付文字列, 売上個数>
  * @param endDate 参照期間の最終日
@@ -210,24 +288,42 @@ function calcBaseRate(
   dowIndices: number[],
 ): number {
   const alpha = 2 / (lookbackDays + 1); // 指数平滑化係数
-  let weightedSum = 0;
-  let weightSum = 0;
 
+  // まず全データを収集
+  const dataPoints: { qty: number; dow: number; weight: number }[] = [];
   for (let i = 0; i < lookbackDays; i++) {
     const dateStr = addDays(endDate, -i);
     const qty = dailySales.get(dateStr) ?? 0;
     const dow = getDow(dateStr);
-    const idx = dowIndices[dow] || 1;
-
-    // 曜日効果を除去してから平滑化
-    const deseasonalized = idx > 0 ? qty / idx : qty;
-    const weight = Math.pow(1 - alpha, i); // 直近ほど重い
-
-    weightedSum += deseasonalized * weight;
-    weightSum += weight;
+    const weight = Math.pow(1 - alpha, i);
+    dataPoints.push({ qty, dow, weight });
   }
 
-  return weightSum > 0 ? weightedSum / weightSum : 0;
+  // 外れ値を検出（IQR法）
+  const allQtys = dataPoints.map(d => d.qty);
+  const cleanedQtys = removeOutliers(allQtys);
+  const maxAllowed = cleanedQtys.length > 0 ? Math.max(...cleanedQtys) * 1.5 : Infinity;
+
+  let weightedSum = 0;
+  let weightSum = 0;
+
+  for (const dp of dataPoints) {
+    // 外れ値は除外（ただしゼロは含める）
+    if (dp.qty > maxAllowed) continue;
+
+    const idx = dowIndices[dp.dow] || 1;
+    const deseasonalized = idx > 0 ? dp.qty / idx : dp.qty;
+
+    weightedSum += deseasonalized * dp.weight;
+    weightSum += dp.weight;
+  }
+
+  const baseRate = weightSum > 0 ? weightedSum / weightSum : 0;
+
+  // トレンド係数を適用
+  const trendFactor = calcTrendFactor(dailySales, endDate, lookbackDays);
+
+  return baseRate * trendFactor;
 }
 
 /**
