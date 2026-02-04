@@ -21,6 +21,7 @@
 import { supabase } from '../config/supabase';
 import { ABC_RANKS, assignABCRanks, summarizeRanks } from '../config/abc-ranks';
 import { getLearnedParams, LearnedParams } from './forecast-learner';
+import { DEFAULT_EXCLUDED_CATEGORY_IDS } from '../config/constants';
 
 // ════════════════════════════════════════════════
 // 型定義
@@ -346,10 +347,18 @@ export async function executeForecast(config: ForecastConfig) {
   console.log('曜日分析:', dowStart, '〜', refEnd, `(${dowDays}日)`);
 
   // ── 1. 商品マスタ ──
-  const products = await fetchAll(
+  const productsRaw = await fetchAll(
     'products_cache', '*',
     (q) => q.in('supplier_name', supplierNames),
   );
+  // 青果・果物カテゴリを除外
+  const products = productsRaw.filter(
+    (p: any) => !DEFAULT_EXCLUDED_CATEGORY_IDS.includes(String(p.category_id))
+  );
+  const excludedCount = productsRaw.length - products.length;
+  if (excludedCount > 0) {
+    console.log(`カテゴリ除外: ${excludedCount}商品（青果・果物）`);
+  }
   if (!products.length) {
     return emptyResponse(storeId, supplierNames, orderDate, fDays, lbDays);
   }

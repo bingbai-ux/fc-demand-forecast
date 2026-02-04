@@ -20,6 +20,7 @@ import { Router } from 'express';
 import { supabase } from '../config/supabase';
 import { executeForecast, todayJST } from '../services/forecast-engine';
 import { saveForecastSnapshot, runDailyLearning, getAccuracySummary } from '../services/forecast-learner';
+import { DEFAULT_EXCLUDED_CATEGORY_IDS, ACTIVE_PRODUCT_LOOKBACK_DAYS } from '../config/constants';
 
 const router = Router();
 
@@ -308,6 +309,8 @@ router.post('/simulate-stock', async (req, res) => {
 // ════════════════════════════════════════════════
 // GET /stockout-analysis/:storeId — 欠品コスト分析
 // ════════════════════════════════════════════════
+// 改善版: 現行品（在庫>0 OR 直近60日売上あり）のみを対象
+// 青果・果物カテゴリは除外
 router.get('/stockout-analysis/:storeId', async (req, res) => {
   try {
     const { storeId } = req.params;
@@ -318,14 +321,42 @@ router.get('/stockout-analysis/:storeId', async (req, res) => {
     const endDate = new Date(year, monthNum, 0).toISOString().split('T')[0];
     const daysInMonth = new Date(year, monthNum, 0).getDate();
 
-    // 在庫ゼロ商品
-    const { data: stockData } = await supabase
+    // Step 1: 全在庫データを取得
+    const { data: allStockData } = await supabase
       .from('stock_cache')
       .select('product_id, stock_amount')
-      .eq('store_id', storeId)
-      .lte('stock_amount', 0);
+      .eq('store_id', storeId);
 
-    const stockoutIds = (stockData || []).map((s: any) => String(s.product_id));
+    // Step 2: 直近N日に売上がある商品IDを取得（現行品判定用）
+    const activeStartDate = addDaysSimple(startDate, -ACTIVE_PRODUCT_LOOKBACK_DAYS);
+    const { data: recentSalesData } = await supabase
+      .from('sales_daily_summary')
+      .select('product_id')
+      .eq('store_id', storeId)
+      .gte('sale_date', activeStartDate)
+      .lte('sale_date', endDate);
+
+    const recentSalesIds = new Set(
+      (recentSalesData || []).map((s: any) => String(s.product_id))
+    );
+
+    // Step 3: 在庫マップを構築
+    const stockMap = new Map<string, number>();
+    (allStockData || []).forEach((s: any) =>
+      stockMap.set(String(s.product_id), Number(s.stock_amount) || 0)
+    );
+
+    // Step 4: 現行品かつ在庫ゼロの商品を特定
+    // 現行品 = 在庫 > 0 OR 直近60日に売上あり
+    const stockoutIds = (allStockData || [])
+      .filter((s: any) => {
+        const pid = String(s.product_id);
+        const stock = Number(s.stock_amount) || 0;
+        const hasRecentSales = recentSalesIds.has(pid);
+        // 在庫ゼロかつ現行品（直近売上あり）の場合のみ欠品
+        return stock <= 0 && hasRecentSales;
+      })
+      .map((s: any) => String(s.product_id));
 
     if (stockoutIds.length === 0) {
       return res.json({
@@ -340,21 +371,31 @@ router.get('/stockout-analysis/:storeId', async (req, res) => {
       });
     }
 
+    // Step 5: 商品マスタを取得（青果・果物カテゴリは除外）
     const { data: products } = await supabase
       .from('products_cache')
-      .select('product_id, product_name, price, cost')
-      .in('product_id', stockoutIds.slice(0, 100));
+      .select('product_id, product_name, price, cost, category_id')
+      .in('product_id', stockoutIds.slice(0, 500));
+
+    // 除外カテゴリをフィルタ
+    const filteredProducts = (products || []).filter(
+      (p: any) => !DEFAULT_EXCLUDED_CATEGORY_IDS.includes(String(p.category_id))
+    );
 
     const productMap = new Map<string, any>();
-    (products || []).forEach((p: any) => productMap.set(String(p.product_id), p));
+    filteredProducts.forEach((p: any) => productMap.set(String(p.product_id), p));
 
+    // フィルタ後のIDリスト
+    const filteredStockoutIds = stockoutIds.filter((pid) => productMap.has(pid));
+
+    // Step 6: 売上データを取得
     const { data: salesData } = await supabase
       .from('sales_daily_summary')
       .select('product_id, total_quantity')
       .eq('store_id', storeId)
       .gte('sale_date', startDate)
       .lte('sale_date', endDate)
-      .in('product_id', stockoutIds.slice(0, 100));
+      .in('product_id', filteredStockoutIds.slice(0, 500));
 
     const salesTotals = new Map<string, number>();
     (salesData || []).forEach((s: any) => {
@@ -362,7 +403,8 @@ router.get('/stockout-analysis/:storeId', async (req, res) => {
       salesTotals.set(pid, (salesTotals.get(pid) || 0) + Number(s.total_quantity || 0));
     });
 
-    const result = stockoutIds.map((pid) => {
+    // Step 7: 結果を構築
+    const result = filteredStockoutIds.map((pid) => {
       const p = productMap.get(pid);
       const totalSales = salesTotals.get(pid) || 0;
       const avgDaily = Math.round((totalSales / daysInMonth) * 10) / 10;
@@ -385,6 +427,13 @@ router.get('/stockout-analysis/:storeId', async (req, res) => {
       }
     });
 
+    // 現行品数を計算（stockoutRate計算用）
+    const activeProductCount = (allStockData || []).filter((s: any) => {
+      const pid = String(s.product_id);
+      const stock = Number(s.stock_amount) || 0;
+      return stock > 0 || recentSalesIds.has(pid);
+    }).length;
+
     res.json({
       success: true,
       data: {
@@ -393,9 +442,12 @@ router.get('/stockout-analysis/:storeId', async (req, res) => {
           totalLoss,
           totalStockoutDays: result.length,
           totalProducts: result.length,
-          stockoutRate: Math.round((result.length / Math.max(productMap.size, 1)) * 100),
+          stockoutRate: Math.round((result.length / Math.max(activeProductCount, 1)) * 100),
           lossChangePercent: 0,
           daysChangePercent: 0,
+          // デバッグ情報
+          activeProductCount,
+          excludedCategories: DEFAULT_EXCLUDED_CATEGORY_IDS,
         },
         byRank,
         topStockoutProducts: sorted.slice(0, 10),
