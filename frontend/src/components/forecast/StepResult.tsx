@@ -673,9 +673,9 @@ const StepResult: React.FC<StepResultProps> = ({
                 <h4 className="font-medium text-gray-700 mb-2">⚠️ 異常検知アラート</h4>
                 <div className="text-gray-600 ml-4 space-y-0.5 text-xs">
                   <p>🔴 <span className="font-medium">欠品中</span> — 在庫0かつ需要あり</p>
-                  <p>🟠 <span className="font-medium">欠品リスク</span> — 在庫日数 < 3日</p>
+                  <p>🟠 <span className="font-medium">欠品リスク</span> — 在庫日数 &lt; 3日</p>
                   <p>🟡 <span className="font-medium">発注急増</span> — 予測の2倍超の発注必要</p>
-                  <p>🔵 <span className="font-medium">過剰在庫</span> — 在庫日数 > 30日</p>
+                  <p>🔵 <span className="font-medium">過剰在庫</span> — 在庫日数 &gt; 30日</p>
                 </div>
               </div>
 
