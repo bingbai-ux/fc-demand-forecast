@@ -428,11 +428,15 @@ router.get('/stockout-analysis/:storeId', async (req, res) => {
     });
 
     // 現行品数を計算（stockoutRate計算用）
-    const activeProductCount = (allStockData || []).filter((s: any) => {
-      const pid = String(s.product_id);
-      const stock = Number(s.stock_amount) || 0;
-      return stock > 0 || recentSalesIds.has(pid);
-    }).length;
+    // 修正: stock_cache と sales_daily_summary の UNION を取る
+    // stock_cache に存在しない商品（在庫管理対象外）も売上があれば現行品としてカウント
+    const productsWithStock = new Set(
+      (allStockData || [])
+        .filter((s: any) => Number(s.stock_amount) > 0)
+        .map((s: any) => String(s.product_id))
+    );
+    const activeProductIds = new Set([...productsWithStock, ...recentSalesIds]);
+    const activeProductCount = activeProductIds.size;
 
     res.json({
       success: true,
