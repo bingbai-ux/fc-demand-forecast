@@ -159,7 +159,7 @@ router.get('/product-sales-history', async (req, res) => {
       .from('sales_daily_summary')
       .select('sale_date, total_quantity')
       .eq('product_id', String(productId))
-      .eq('store_id', String(storeId))
+      .in('store_id', [String(storeId)])
       .gte('sale_date', startDate)
       .lte('sale_date', today)
       .order('sale_date', { ascending: true });
@@ -215,13 +215,13 @@ router.get('/product-detail/:productId', async (req, res) => {
       supabase.from('sales_daily_summary')
         .select('sale_date, total_quantity')
         .eq('product_id', String(productId))
-        .eq('store_id', String(storeId))
+        .in('store_id', [String(storeId)])
         .gte('sale_date', startDate)
         .lte('sale_date', today)
         .order('sale_date', { ascending: true }),
       supabase.from('products_cache').select('*').eq('product_id', productId).single(),
       supabase.from('product_order_lots').select('*').eq('product_id', productId).single(),
-      supabase.from('stock_cache').select('*').eq('product_id', productId).eq('store_id', storeId).single(),
+      supabase.from('stock_cache').select('*').eq('product_id', productId).in('store_id', [storeId]).single(),
     ]);
 
     const salesHistory = salesRes.data || [];
@@ -322,17 +322,18 @@ router.get('/stockout-analysis/:storeId', async (req, res) => {
     const daysInMonth = new Date(year, monthNum, 0).getDate();
 
     // Step 1: 全在庫データを取得
+    // 注意: .eq()ではなく.in()を使用（型変換の違いで取得件数が異なる問題を回避）
     const { data: allStockData } = await supabase
       .from('stock_cache')
       .select('product_id, stock_amount')
-      .eq('store_id', storeId);
+      .in('store_id', [storeId]);
 
     // Step 2: 直近N日に売上がある商品IDを取得（現行品判定用）
     const activeStartDate = addDaysSimple(startDate, -ACTIVE_PRODUCT_LOOKBACK_DAYS);
     const { data: recentSalesData } = await supabase
       .from('sales_daily_summary')
       .select('product_id')
-      .eq('store_id', storeId)
+      .in('store_id', [storeId])
       .gte('sale_date', activeStartDate)
       .lte('sale_date', endDate);
 
@@ -392,7 +393,7 @@ router.get('/stockout-analysis/:storeId', async (req, res) => {
     const { data: salesData } = await supabase
       .from('sales_daily_summary')
       .select('product_id, total_quantity')
-      .eq('store_id', storeId)
+      .in('store_id', [storeId])
       .gte('sale_date', startDate)
       .lte('sale_date', endDate)
       .in('product_id', filteredStockoutIds.slice(0, 500));

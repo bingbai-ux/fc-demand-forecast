@@ -366,11 +366,12 @@ export async function executeForecast(config: ForecastConfig) {
   console.log('商品数:', pids.length);
 
   // ── 2. 売上データ（曜日分析用の長期間） ──
+  // 注意: .eq()ではなく.in()を使用（型変換の違いで取得件数が異なる問題を回避）
   const salesRaw = await fetchByProductIds(
     'sales_daily_summary',
     'product_id, sale_date, total_quantity',
     pids,
-    (q) => q.eq('store_id', String(storeId)).gte('sale_date', dowStart).lte('sale_date', refEnd),
+    (q) => q.in('store_id', [String(storeId)]).gte('sale_date', dowStart).lte('sale_date', refEnd),
   );
   console.log('売上レコード:', salesRaw.length);
 
@@ -389,7 +390,7 @@ export async function executeForecast(config: ForecastConfig) {
     'sales_daily_summary',
     'product_id, total_quantity',
     pids,
-    (q) => q.eq('store_id', String(storeId)).gte('sale_date', activeStart).lte('sale_date', orderDate),
+    (q) => q.in('store_id', [String(storeId)]).gte('sale_date', activeStart).lte('sale_date', orderDate),
   );
   const recentTotals = new Map<string, number>();
   recentSalesRaw.forEach((r: any) => {
@@ -401,7 +402,7 @@ export async function executeForecast(config: ForecastConfig) {
   const stockRaw = await fetchByProductIds(
     'stock_cache', 'product_id, stock_amount',
     pids,
-    (q) => q.eq('store_id', String(storeId)),
+    (q) => q.in('store_id', [String(storeId)]),
   );
   const stockMap = new Map<string, number>();
   stockRaw.forEach((r: any) => stockMap.set(String(r.product_id), Number(r.stock_amount) || 0));
