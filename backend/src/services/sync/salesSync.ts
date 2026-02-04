@@ -1,5 +1,6 @@
 import { supabase } from '../../config/supabase';
 import { smaregiClient } from '../smaregi/client';
+import type { SalesCache, SalesDailySummary } from '../../types/database';
 
 /**
  * 特定日の売上データを集計テーブルに追加/更新する
@@ -8,13 +9,13 @@ import { smaregiClient } from '../smaregi/client';
  */
 export async function updateDailySummaryForDate(dateStr: string): Promise<number> {
   console.log(`   📊 集計テーブルを更新中: ${dateStr}`);
-  
+
   // 該当日の売上データを取得（ページネーション対応）
   const PAGE_SIZE = 1000;
-  let allSalesData: any[] = [];
+  const allSalesData: SalesCache[] = [];
   let from = 0;
   let hasMore = true;
-  
+
   while (hasMore) {
     const { data: salesData, error: salesError } = await supabase
       .from('sales_cache')
@@ -22,14 +23,15 @@ export async function updateDailySummaryForDate(dateStr: string): Promise<number
       .gte('sale_date', dateStr)
       .lte('sale_date', dateStr + 'T23:59:59')
       .range(from, from + PAGE_SIZE - 1);
-    
+
     if (salesError) {
       console.error(`   集計エラー: ${salesError.message}`);
       return 0;
     }
-    
+
     if (salesData && salesData.length > 0) {
-      allSalesData = allSalesData.concat(salesData);
+      // メモリ効率化: concat → push
+      allSalesData.push(...(salesData as SalesCache[]));
       from += PAGE_SIZE;
       hasMore = salesData.length === PAGE_SIZE;
     } else {
@@ -64,8 +66,8 @@ export async function updateDailySummaryForDate(dateStr: string): Promise<number
     
     const summary = summaryMap.get(key)!;
     summary.total_quantity += sale.quantity || 0;
-    summary.total_sales += parseFloat(sale.sales_amount) || 0;
-    summary.total_cost += parseFloat(sale.cost_amount) || 0;
+    summary.total_sales += Number(sale.sales_amount) || 0;
+    summary.total_cost += Number(sale.cost_amount) || 0;
   }
   
   // バッチでupsert
@@ -194,17 +196,25 @@ export const syncSalesForDate = async (date: string): Promise<{ success: boolean
       .delete()
       .eq('sale_date', date);
     
-    // バッチ挿入
+    // バッチ挿入（並列化で高速化）
     const batchSize = 1000;
-    for (let i = 0; i < salesRecords.length; i += batchSize) {
-      const batch = salesRecords.slice(i, i + batchSize);
-      const { error } = await supabase
-        .from('sales_cache')
-        .insert(batch);
-      
+    const insertBatch = async (batch: typeof salesRecords): Promise<void> => {
+      const { error } = await supabase.from('sales_cache').insert(batch);
       if (error) {
         throw new Error(`売上挿入エラー: ${error.message}`);
       }
+    };
+
+    // 最大3並列で実行（Supabaseの接続制限を考慮）
+    const PARALLEL_LIMIT = 3;
+    for (let i = 0; i < salesRecords.length; i += batchSize * PARALLEL_LIMIT) {
+      const batchPromises: Promise<void>[] = [];
+      for (let j = 0; j < PARALLEL_LIMIT && i + j * batchSize < salesRecords.length; j++) {
+        const start = i + j * batchSize;
+        const batch = salesRecords.slice(start, start + batchSize);
+        batchPromises.push(insertBatch(batch));
+      }
+      await Promise.all(batchPromises);
     }
     
     console.log(`✅ ${date}の売上同期完了: ${salesRecords.length}件`);

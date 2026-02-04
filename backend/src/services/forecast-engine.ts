@@ -21,6 +21,7 @@
 import { supabase } from '../config/supabase';
 import { ABC_RANKS, assignABCRanks, summarizeRanks } from '../config/abc-ranks';
 import { getLearnedParams, LearnedParams } from './forecast-learner';
+import { DEFAULT_EXCLUDED_CATEGORY_IDS } from '../config/constants';
 
 // ════════════════════════════════════════════════
 // 型定義
@@ -115,13 +116,15 @@ const IN_CHUNK = 100; // .in() フィルタの安全なチャンクサイズ
 /**
  * ページネーション付き全件取得
  * Supabaseデフォルト1000行制限を回避する。
+ *
+ * メモリ効率化: concat → push を使用してO(n²)コピーを回避
  */
-async function fetchAll(
+async function fetchAll<T = any>(
   table: string,
   select: string,
   applyFilters: (q: any) => any,
-): Promise<any[]> {
-  let all: any[] = [];
+): Promise<T[]> {
+  const all: T[] = [];
   let offset = 0;
   while (true) {
     let q = supabase.from(table).select(select);
@@ -129,7 +132,8 @@ async function fetchAll(
     const { data, error } = await q.range(offset, offset + DB_PAGE - 1);
     if (error) throw error;
     if (!data || data.length === 0) break;
-    all = all.concat(data);
+    // push を使用してメモリ効率を改善（concat は新しい配列を作成する）
+    all.push(...(data as T[]));
     if (data.length < DB_PAGE) break;
     offset += DB_PAGE;
   }
@@ -137,19 +141,19 @@ async function fetchAll(
 }
 
 /** product_id の .in() をチャンク分割 + ページネーション */
-async function fetchByProductIds(
+async function fetchByProductIds<T = any>(
   table: string,
   select: string,
   productIds: string[],
   extraFilters: (q: any) => any,
-): Promise<any[]> {
-  let all: any[] = [];
+): Promise<T[]> {
+  const all: T[] = [];
   for (let i = 0; i < productIds.length; i += IN_CHUNK) {
     const chunk = productIds.slice(i, i + IN_CHUNK);
-    const data = await fetchAll(table, select, (q) =>
+    const data = await fetchAll<T>(table, select, (q) =>
       extraFilters(q.in('product_id', chunk)),
     );
-    all = all.concat(data);
+    all.push(...data);
   }
   return all;
 }
@@ -343,10 +347,18 @@ export async function executeForecast(config: ForecastConfig) {
   console.log('曜日分析:', dowStart, '〜', refEnd, `(${dowDays}日)`);
 
   // ── 1. 商品マスタ ──
-  const products = await fetchAll(
+  const productsRaw = await fetchAll(
     'products_cache', '*',
     (q) => q.in('supplier_name', supplierNames),
   );
+  // 青果・果物カテゴリを除外
+  const products = productsRaw.filter(
+    (p: any) => !DEFAULT_EXCLUDED_CATEGORY_IDS.includes(String(p.category_id))
+  );
+  const excludedCount = productsRaw.length - products.length;
+  if (excludedCount > 0) {
+    console.log(`カテゴリ除外: ${excludedCount}商品（青果・果物）`);
+  }
   if (!products.length) {
     return emptyResponse(storeId, supplierNames, orderDate, fDays, lbDays);
   }
