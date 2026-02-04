@@ -329,13 +329,15 @@ router.get('/stockout-analysis/:storeId', async (req, res) => {
       .in('store_id', [storeId]);
 
     // Step 2: 直近N日に売上がある商品IDを取得（現行品判定用）
+    // 注意: Supabaseのデフォルト上限は1000件なので、limitを明示的に指定
     const activeStartDate = addDaysSimple(startDate, -ACTIVE_PRODUCT_LOOKBACK_DAYS);
     const { data: recentSalesData } = await supabase
       .from('sales_daily_summary')
       .select('product_id')
       .in('store_id', [storeId])
       .gte('sale_date', activeStartDate)
-      .lte('sale_date', endDate);
+      .lte('sale_date', endDate)
+      .limit(10000);
 
     const recentSalesIds = new Set(
       (recentSalesData || []).map((s: any) => String(s.product_id))
