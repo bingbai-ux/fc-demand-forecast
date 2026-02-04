@@ -25,6 +25,63 @@ import { DEFAULT_EXCLUDED_CATEGORY_IDS, ACTIVE_PRODUCT_LOOKBACK_DAYS } from '../
 const router = Router();
 
 // ════════════════════════════════════════════════
+// Supabase ページネーションヘルパー
+// ════════════════════════════════════════════════
+// Supabaseのmax_rows設定（デフォルト1000）を回避するため、
+// ページネーションで全件取得する
+interface SupabaseFilter {
+  column: string;
+  op: 'eq' | 'in' | 'gte' | 'lte';
+  value: any;
+}
+
+async function fetchAllFromSupabase(
+  table: string,
+  selectColumns: string,
+  filters: SupabaseFilter[],
+  pageSize: number = 1000
+): Promise<any[]> {
+  let allData: any[] = [];
+  let offset = 0;
+
+  while (true) {
+    let query = supabase
+      .from(table)
+      .select(selectColumns)
+      .range(offset, offset + pageSize - 1);
+
+    // フィルタを適用
+    for (const filter of filters) {
+      if (filter.op === 'eq') {
+        query = query.eq(filter.column, filter.value);
+      } else if (filter.op === 'in') {
+        query = query.in(filter.column, filter.value);
+      } else if (filter.op === 'gte') {
+        query = query.gte(filter.column, filter.value);
+      } else if (filter.op === 'lte') {
+        query = query.lte(filter.column, filter.value);
+      }
+    }
+
+    const { data, error } = await query;
+
+    if (error) {
+      console.error(`Supabase fetchAll error (${table}):`, error);
+      throw error;
+    }
+    if (!data || data.length === 0) break;
+
+    allData = [...allData, ...data];
+
+    // 取得件数がpageSizeより少なければ最後のページ
+    if (data.length < pageSize) break;
+    offset += pageSize;
+  }
+
+  return allData;
+}
+
+// ════════════════════════════════════════════════
 // POST /calculate — 需要予測メイン
 // ════════════════════════════════════════════════
 router.post('/calculate', async (req, res) => {
@@ -321,25 +378,25 @@ router.get('/stockout-analysis/:storeId', async (req, res) => {
     const endDate = new Date(year, monthNum, 0).toISOString().split('T')[0];
     const daysInMonth = new Date(year, monthNum, 0).getDate();
 
-    // Step 1: 全在庫データを取得
-    // 注意: .eq()ではなく.in()を使用（型変換の違いで取得件数が異なる問題を回避）
-    // 注意: Supabaseのデフォルト上限は1000件なので、limitを明示的に指定
-    const { data: allStockData } = await supabase
-      .from('stock_cache')
-      .select('product_id, stock_amount')
-      .in('store_id', [storeId])
-      .limit(10000);
+    // Step 1: 全在庫データを取得（ページネーションで全件取得）
+    // Supabaseのmax_rows設定（デフォルト1000）を回避するためページネーションを使用
+    const allStockData = await fetchAllFromSupabase(
+      'stock_cache',
+      'product_id, stock_amount',
+      [{ column: 'store_id', op: 'in', value: [storeId] }]
+    );
 
-    // Step 2: 直近N日に売上がある商品IDを取得（現行品判定用）
-    // 注意: Supabaseのデフォルト上限は1000件なので、limitを明示的に指定
+    // Step 2: 直近N日に売上がある商品IDを取得（ページネーションで全件取得）
     const activeStartDate = addDaysSimple(startDate, -ACTIVE_PRODUCT_LOOKBACK_DAYS);
-    const { data: recentSalesData } = await supabase
-      .from('sales_daily_summary')
-      .select('product_id')
-      .in('store_id', [storeId])
-      .gte('sale_date', activeStartDate)
-      .lte('sale_date', endDate)
-      .limit(10000);
+    const recentSalesData = await fetchAllFromSupabase(
+      'sales_daily_summary',
+      'product_id',
+      [
+        { column: 'store_id', op: 'in', value: [storeId] },
+        { column: 'sale_date', op: 'gte', value: activeStartDate },
+        { column: 'sale_date', op: 'lte', value: endDate },
+      ]
+    );
 
     const recentSalesIds = new Set(
       (recentSalesData || []).map((s: any) => String(s.product_id))
