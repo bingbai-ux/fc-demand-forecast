@@ -734,6 +734,8 @@ export async function executeForecast(config: ForecastConfig) {
       safetyStock: adjustedSafetyStock,
       safetyStockDays: adjustedSafetyDays,
       recommendedOrder,
+      perishableConstrained,
+      maxOrderByShelfLife: maxOrderByShelfLife === Infinity ? null : maxOrderByShelfLife,
       orderAmount,
       lotSize,
       cost,
