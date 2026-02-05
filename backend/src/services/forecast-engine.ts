@@ -22,6 +22,7 @@ import { supabase } from '../config/supabase';
 import { ABC_RANKS, assignABCRanks, summarizeRanks } from '../config/abc-ranks';
 import { getLearnedParams, LearnedParams } from './forecast-learner';
 import { DEFAULT_EXCLUDED_CATEGORY_IDS } from '../config/constants';
+import { getPerishableConfigByName, calcMaxOrderByShelfLife } from '../config/perishable-categories';
 
 // ════════════════════════════════════════════════
 // 型定義
@@ -663,6 +664,31 @@ export async function executeForecast(config: ForecastConfig) {
       recommendedOrder = 0;
     }
 
+    // ── ペリシャブル制約（賞味期限による発注上限） ──
+    const categoryId = parseInt(p.category_id) || 0;
+    const categoryName = p.category_name || '';
+    const deliveryFreqDays = suppSettings?.delivery_frequency_days || 7;
+    const perishableConfig = getPerishableConfigByName(categoryName);
+    let perishableConstrained = false;
+    let maxOrderByShelfLife = Infinity;
+
+    if (perishableConfig && stats.avgDaily > 0) {
+      // 最大在庫 = min(設定の最大日数, 納品頻度 × 1.5) × 日販
+      const effectiveMaxDays = Math.min(perishableConfig.maxStockDays, deliveryFreqDays * 1.5);
+      maxOrderByShelfLife = Math.max(0, effectiveMaxDays * stats.avgDaily - currentStock);
+
+      if (recommendedOrder > maxOrderByShelfLife) {
+        // ロットサイズを考慮して切り下げ
+        if (lotSize > 1) {
+          recommendedOrder = Math.floor(maxOrderByShelfLife / lotSize) * lotSize;
+        } else {
+          recommendedOrder = Math.floor(maxOrderByShelfLife);
+        }
+        recommendedOrder = Math.max(0, recommendedOrder);
+        perishableConstrained = true;
+      }
+    }
+
     const orderAmount = Math.round(recommendedOrder * cost);
 
     // ── 計算式テキスト（表示と実計算が一致） ──
@@ -672,10 +698,13 @@ export async function executeForecast(config: ForecastConfig) {
     const safetyLabel = learningCycles >= 3 && safetyMultiplier !== 1.0
       ? `(×${safetyMultiplier})`
       : '';
+    const perishableLabel = perishableConstrained
+      ? ` [賞味期限制約: 上限${round(maxOrderByShelfLife, 1)}]`
+      : '';
     const breakdown =
       `予測${forecastQuantity}${biasLabel} + LT${leadTimeDemand}` +
       ` + 安全${adjustedSafetyStock}${safetyLabel}` +
-      ` - 在庫${currentStock} = 純需要${round(netDemand, 1)}`;
+      ` - 在庫${currentStock} = 純需要${round(netDemand, 1)}${perishableLabel}`;
 
     // ── 過去売上（表示用） ──
     const pastSalesData = buildPastSales(
