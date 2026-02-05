@@ -57,6 +57,8 @@ export interface ProductForecast {
   safetyStockDays: number;    // 安全在庫（日数換算）
   // 発注
   recommendedOrder: number;
+  perishableConstrained: boolean;       // ペリシャブル制約が適用されたか
+  maxOrderByShelfLife: number | null;   // 賞味期限による発注上限
   orderAmount: number;        // 原価ベース
   lotSize: number;
   cost: number;
