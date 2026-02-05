@@ -68,29 +68,29 @@ async function analyzeShinjukuForecast() {
   let stockData;
   try {
     stockData = await fetchApi(`/api/stock?storeIds=${STORE_ID}`);
-    console.log(`  - 在庫データ取得成功`);
+    console.log(`  - 在庫データ取得成功: ${stockData.count || 0}件`);
   } catch (e) {
     console.error('  - 在庫データ取得失敗:', e);
-    stockData = { products: {} };
+    stockData = { data: [] };
   }
 
-  const stockMap = new Map<string, { productId: string; productName: string; stock: number; categoryName: string; supplierName: string }>();
-  if (stockData.products) {
-    Object.entries(stockData.products).forEach(([pid, info]: [string, any]) => {
-      const storeStock = info.stores?.[STORE_ID] || { stockAmount: 0 };
-      if (storeStock.stockAmount > 0) {
-        stockMap.set(pid, {
-          productId: pid,
-          productName: info.productName || '不明',
-          stock: storeStock.stockAmount,
-          categoryName: info.categoryName || '不明',
-          supplierName: info.supplierName || '不明'
+  const stockMap = new Map<string, { productId: string; stock: number }>();
+  if (stockData.data && Array.isArray(stockData.data)) {
+    stockData.data.forEach((item: any) => {
+      const stock = item.stockByStore?.[STORE_ID] ?? item.totalStock ?? 0;
+      if (stock > 0) {
+        stockMap.set(item.productId, {
+          productId: item.productId,
+          stock: stock
         });
       }
     });
   }
 
-  console.log(`  - 在庫あり商品数: ${stockMap.size}`);
+  const totalStockCount = stockData.data?.length || 0;
+  const positiveStockCount = stockMap.size;
+  console.log(`  - 総在庫レコード数: ${totalStockCount}`);
+  console.log(`  - 在庫あり商品数（stock > 0）: ${positiveStockCount}`);
 
   // ── 2. 全仕入先リスト取得 ──
   console.log('\n📋 Step 2: 仕入先リストを取得中...');
@@ -212,10 +212,12 @@ async function analyzeShinjukuForecast() {
   console.log('════════════════════════════════════════════════════════════════════════════════\n');
 
   // 5.1 在庫サマリー
+  const totalStockQty = Array.from(stockMap.values()).reduce((a, b) => a + b.stock, 0);
   console.log('▼ 新宿店 在庫サマリー（2/4時点）');
   console.log('─────────────────────────────────────────────────────────────────────');
-  console.log(`  在庫あり商品数: ${stockMap.size}件`);
-  console.log(`  在庫総数: ${Array.from(stockMap.values()).reduce((a, b) => a + b.stock, 0)}個`);
+  console.log(`  総在庫レコード数: ${totalStockCount}件`);
+  console.log(`  在庫あり商品数（stock > 0）: ${positiveStockCount}件`);
+  console.log(`  在庫総数: ${totalStockQty}個`);
 
   // 5.2 参照期間別の予測結果
   console.log('\n▼ 参照期間別 予測結果');
@@ -499,7 +501,7 @@ async function analyzeShinjukuForecast() {
   console.log('【最終サマリー】');
   console.log('════════════════════════════════════════════════════════════════════════════════');
 
-  const totalStock = Array.from(stockMap.values()).reduce((a, b) => a + b.stock, 0);
+  const totalStock = totalStockQty;
 
   console.log(`
   ■ 分析日時: ${new Date().toISOString()}
