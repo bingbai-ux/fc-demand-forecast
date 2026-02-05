@@ -21,13 +21,17 @@ END $$;
 -- 2. 納品頻度の設定
 -- デフォルト: 7日（週1回）
 
--- ゆうき八百屋（冷蔵）: 週4回 = 約2日
+-- C.ゆうき八百屋（冷蔵）: 週4回 = 約2日
 UPDATE suppliers SET delivery_frequency_days = 2
-WHERE supplier_name LIKE '%ゆうき八百屋%';
+WHERE supplier_name = 'C.ゆうき八百屋';
 
--- ムソー（冷蔵）: 週1回 = 7日
+-- ムソー冷蔵: 週1回 = 7日
 UPDATE suppliers SET delivery_frequency_days = 7
-WHERE supplier_name LIKE '%ムソー%';
+WHERE supplier_name = 'ムソー冷蔵';
+
+-- 創健社冷蔵: 週1回 = 7日
+UPDATE suppliers SET delivery_frequency_days = 7
+WHERE supplier_name = '創健社冷蔵';
 
 -- ノースプレインファーム: 週1回 = 7日
 UPDATE suppliers SET delivery_frequency_days = 7
